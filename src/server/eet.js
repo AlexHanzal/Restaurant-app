@@ -122,7 +122,81 @@ function buildTrzbaBody(sale) {
         + `</soapenv:Body>`;
 }
 
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+
+// WHY SignedInfo declares xmlns:ds itself: when the server verifies, it
+// canonicalises the SignedInfo SUBTREE. In subtree canonicalisation
+// SignedInfo is the apex, so exc-c14n always renders the ds declaration on it
+// regardless of where the document declared it. Emitting it here makes our
+// bytes identical to the server's canonical form. Omit it and the signature
+// fails with error code 4 — with no clue as to why.
+function signedInfoFor(bodyXml) {
+    const digest = crypto.createHash("sha256").update(bodyXml, "utf8").digest("base64");
+    return `<ds:SignedInfo xmlns:ds="${DS_NS}">`
+        + `<ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:CanonicalizationMethod>`
+        + `<ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod>`
+        + `<ds:Reference URI="#${BODY_ID}">`
+        + `<ds:Transforms>`
+        + `<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:Transform>`
+        + `</ds:Transforms>`
+        + `<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod>`
+        + `<ds:DigestValue>${digest}</ds:DigestValue>`
+        + `</ds:Reference>`
+        + `</ds:SignedInfo>`;
+}
+
+// node:crypto has NO PKCS#12 support — createPrivateKey accepts PEM/DER only.
+// The pokladní certifikát from MOJE daně arrives as .p12 and must be converted
+// once at deploy time:
+//   openssl pkcs12 -in pokladni.p12 -clcerts -nokeys -out secrets/eet-cert.pem
+//   openssl pkcs12 -in pokladni.p12 -nocerts -nodes -out secrets/eet-key.pem
+function loadCredentials({ certPem, keyPem, keyPassphrase }) {
+    const certText = fs.readFileSync(certPem, "utf8");
+    const match = certText.match(/-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/);
+    if (!match) throw new Error(`EET: no PEM certificate found in ${certPem}`);
+
+    const privateKey = crypto.createPrivateKey({
+        key: fs.readFileSync(keyPem, "utf8"),
+        ...(keyPassphrase ? { passphrase: keyPassphrase } : {}),
+    });
+
+    // BinarySecurityToken carries the DER bytes base64'd on a single line.
+    return { certDer: match[1].replace(/\s+/g, ""), privateKey };
+}
+
+function buildSignedEnvelope(bodyXml, creds) {
+    const signedInfo = signedInfoFor(bodyXml);
+    const signature = crypto
+        .sign("sha256", Buffer.from(signedInfo, "utf8"), creds.privateKey)
+        .toString("base64");
+
+    return `<?xml version="1.0" encoding="UTF-8"?>`
+        + `<soapenv:Envelope xmlns:soapenv="${SOAP_NS}">`
+        + `<soapenv:Header>`
+        + `<wsse:Security xmlns:wsse="${WSSE_NS}" xmlns:wsu="${WSU_NS}" soapenv:mustUnderstand="1">`
+        + `<wsse:BinarySecurityToken`
+        + ` EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"`
+        + ` ValueType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3"`
+        + ` wsu:Id="${TOKEN_ID}">${creds.certDer}</wsse:BinarySecurityToken>`
+        + `<ds:Signature xmlns:ds="${DS_NS}">`
+        + signedInfo
+        + `<ds:SignatureValue>${signature}</ds:SignatureValue>`
+        + `<ds:KeyInfo>`
+        + `<wsse:SecurityTokenReference>`
+        + `<wsse:Reference URI="#${TOKEN_ID}"`
+        + ` ValueType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3"></wsse:Reference>`
+        + `</wsse:SecurityTokenReference>`
+        + `</ds:KeyInfo>`
+        + `</ds:Signature>`
+        + `</wsse:Security>`
+        + `</soapenv:Header>`
+        + bodyXml
+        + `</soapenv:Envelope>`;
+}
+
 module.exports = {
     EET_NS, SOAP_NS, WSSE_NS, WSU_NS, DS_NS, BODY_ID, TOKEN_ID,
     escapeAttr, formatAmount, attrs, buildTrzbaBody,
+    signedInfoFor, loadCredentials, buildSignedEnvelope,
 };
