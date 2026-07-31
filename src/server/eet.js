@@ -227,8 +227,89 @@ function buildSignedEnvelope(bodyXml, creds) {
         + `</soapenv:Envelope>`;
 }
 
+const PLAYGROUND_URL = "https://pg.trzbyeet.gov.cz/eet/services/EETServiceSOAP/v4";
+const PRODUCTION_URL = "https://trzbyeet.gov.cz/eet/services/EETServiceSOAP/v4";
+const SOAP_ACTION = "http://fs.gov.cz/eet/OdeslaniTrzby";
+
+// Spec §3.5.4. Only -1 ("dočasná technická chyba") and 8 ("nebyla zpracována
+// kvůli technické chybě") describe a condition that a later identical retry
+// could resolve. Everything else — bad encoding, failed XSD, bad signature,
+// malformed EIČ, oversized message — will fail identically forever, so
+// retrying wastes 48 hours and hides the fault from staff. Codes reserved for
+// future use are treated as terminal-but-loud rather than silently retried.
+function classifyError(code) {
+    return code === -1 || code === 8 ? "retry" : "terminal";
+}
+
+function attrOf(xml, tag, attr) {
+    const el = xml.match(new RegExp(`<(?:\\w+:)?${tag}\\b[^>]*`));
+    if (!el) return null;
+    const m = el[0].match(new RegExp(`\\b${attr}="([^"]*)"`));
+    return m ? m[1] : null;
+}
+
+// Regex parsing is acceptable here ONLY because the payload is a tiny, fixed
+// server-generated structure with no mixed content beyond the error/warning
+// text. Do not grow this into a general XML parser.
+function parseResponse(xml) {
+    const errRaw = attrOf(xml, "Chyba", "kod");
+    const errBody = xml.match(/<(?:\w+:)?Chyba\b[^>]*>([\s\S]*?)<\/(?:\w+:)?Chyba>/);
+    const warnings = [...xml.matchAll(/<(?:\w+:)?Varovani\b[^>]*kod_varov="(\d+)"[^>]*>([\s\S]*?)<\/(?:\w+:)?Varovani>/g)]
+        .map(m => ({ code: Number(m[1]), text: m[2].trim() }));
+
+    return {
+        pok: attrOf(xml, "Potvrzeni", "pok"),
+        uuidZpravy: attrOf(xml, "Hlavicka", "uuid_zpravy"),
+        datPrij: attrOf(xml, "Hlavicka", "dat_prij"),
+        datOdmit: attrOf(xml, "Hlavicka", "dat_odmit"),
+        errorCode: errRaw === null ? null : Number(errRaw),
+        errorText: errBody ? errBody[1].trim() : null,
+        test: attrOf(xml, "Potvrzeni", "test") === "true" || attrOf(xml, "Chyba", "test") === "true",
+        warnings,
+    };
+}
+
+// Sends one sale. Never throws for an EET-level rejection — those come back as
+// { ok: false, errorCode } so the caller can classify. Only genuine transport
+// failures throw, and the caller treats those as retryable.
+async function sendTrzba(config, sale) {
+    const body = buildTrzbaBody(sale);
+    const envelope = buildSignedEnvelope(body, config.credentials);
+    const url = config.playground ? PLAYGROUND_URL : PRODUCTION_URL;
+
+    const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: SOAP_ACTION },
+        body: Buffer.from(envelope, "utf8"),
+        signal: AbortSignal.timeout(config.timeoutMs || 5000),
+    });
+
+    const text = await res.text();
+    if (!res.ok) {
+        const err = new Error(`EET HTTP ${res.status}`);
+        err.retryable = true;
+        throw err;
+    }
+
+    const parsed = parseResponse(text);
+    return {
+        ok: !!parsed.pok,
+        pok: parsed.pok,
+        warnings: parsed.warnings,
+        errorCode: parsed.errorCode,
+        errorText: parsed.errorText,
+        test: parsed.test,
+        raw: text,
+    };
+}
+
+async function verifyConnection(config, sale) {
+    return sendTrzba(config, { ...sale, overeni: true });
+}
+
 module.exports = {
     EET_NS, SOAP_NS, WSSE_NS, WSU_NS, DS_NS, BODY_ID, TOKEN_ID,
     escapeAttr, formatAmount, attrs, buildTrzbaBody,
     signedInfoFor, loadCredentials, buildSignedEnvelope,
+    PLAYGROUND_URL, PRODUCTION_URL, classifyError, parseResponse, sendTrzba, verifyConnection,
 };
