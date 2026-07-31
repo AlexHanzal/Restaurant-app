@@ -183,18 +183,51 @@ const {
 // every sale would be pointless I/O on the payment hot path. Returns null when
 // EET is disabled or the certificate is absent, which is the dev-fallback
 // signal every caller checks.
+//
+// Success and failure are cached very differently, and that asymmetry is the
+// whole point: a successful load is cached FOREVER (eetCredentialsCache),
+// because the cert/key are only ever read once and there is nothing to gain
+// from re-parsing PEM on the hot path once they're known-good. A FAILED load
+// (missing/unreadable certificate) is deliberately NOT cached forever —
+// instead eetCredentialsFailure remembers only the timestamp/reason, and the
+// next call retries the filesystem once EET_CREDENTIALS_RETRY_COOLDOWN_MS has
+// passed. If a failure poisoned eetCredentialsCache the way the old code did
+// (caching `null` permanently), a certificate installed while the server is
+// already running would never be picked up — and the background retry
+// worker (Task 8) that polls this every 60s to flush queued sales could then
+// never recover, leaving unreported sales queued indefinitely and silently.
+// Since unreported sales are a legal compliance problem, "fail once, stay
+// broken until restart" is the wrong default here even though it would be a
+// perfectly reasonable cache policy for, say, a static config value.
+const EET_CREDENTIALS_RETRY_COOLDOWN_MS = 60 * 1000;
 let eetCredentialsCache;
+let eetCredentialsFailure = null; // { at, message } of the most recent load failure, or null once loaded (or never yet attempted)
 function eetCredentials() {
     if (eetCredentialsCache !== undefined) return eetCredentialsCache;
     const cfg = SERVER_CONFIG.eet;
     if (!cfg.enabled) { eetCredentialsCache = null; return null; }
+
+    // Still cooling down from the last failure — return the dev-fallback
+    // signal without touching the filesystem again yet.
+    if (eetCredentialsFailure && Date.now() - eetCredentialsFailure.at < EET_CREDENTIALS_RETRY_COOLDOWN_MS) {
+        return null;
+    }
     try {
         eetCredentialsCache = eet.loadCredentials(cfg);
+        eetCredentialsFailure = null;
     } catch (e) {
         // Never crash the server over EET config — sales still get queued and
-        // the health endpoint surfaces the problem.
-        console.error(`❌ EET: certificate could not be loaded (${e.message}) — sales will queue unsent`);
-        eetCredentialsCache = null;
+        // the health endpoint (Task 8) surfaces the problem. Log the full
+        // diagnostic on the first failure and whenever the reason CHANGES,
+        // but suppress identical repeats — with a 60s retry cooldown and a
+        // retry worker polling that often, logging every attempt would flood
+        // the log during a genuine outage. The condition stays visible via
+        // the health endpoint even while the log line isn't repeating.
+        if (!eetCredentialsFailure || eetCredentialsFailure.message !== e.message) {
+            console.error(`❌ EET: certificate could not be loaded (${e.message}) — sales will queue unsent`);
+        }
+        eetCredentialsFailure = { at: Date.now(), message: e.message };
+        return null;
     }
     return eetCredentialsCache;
 }
