@@ -463,16 +463,66 @@ async function applyGatewayPaymentState(record, state) {
                 order.receiptId = receipt.id;
                 receiptCreated = receipt;
             }
-            // Persist the order's new paymentStatus (and receiptId, if a
-            // receipt was just issued) BEFORE reporting to EET. sendEetForReceipt
-            // is a network round-trip bounded by its own multi-second budget —
-            // the money-side fact "this order is now paid" must be durable
-            // before that call even starts. If the process dies mid-await, the
-            // worst case must be a paid order the EET queue hasn't reported yet
-            // (the background retry worker catches up later), never the
-            // reverse: a reported sale with no corresponding paid order on disk.
+
+            // A storno is an evidovaná tržba with a negative amount
+            // (CastkaType permits it, verified against the live playground —
+            // see tests/integration/eet-playground.test.js). It gets a full
+            // receipt of its own — same funnel, same idempotency — so
+            // porad_cis stays unique with no second numbering scheme, and
+            // dat_trzby is this receipt's own issuedAt, not the original
+            // sale's. originalKind is passed through so eetQueue.registerFor
+            // reports the storno against the SAME idPokl register the
+            // original sale used, per the EIC/idJednotky/idPokl/datTrzby
+            // uniqueness key the tax authority tracks.
+            //
+            // Guarded by order.refundReceiptId (not just newStatus/paid),
+            // because record.status having already flipped to "refunded" is
+            // the FIRST line of defense (see the `newStatus === record.status`
+            // early return above — it already blocks a redelivered/duplicate
+            // GoPay REFUNDED webhook from re-entering this function at all)
+            // but is not the only path that can reach this branch, and this
+            // check is what makes double-processing a no-op rather than a
+            // second negative trzba: once refundReceiptId is set, re-running
+            // this block finds it non-null and does nothing.
+            let refundCreated = null;
+            if (newStatus === "refunded" && order.receiptId && !order.refundReceiptId) {
+                const original = db.get(COL.receipts, order.receiptId);
+                if (original) {
+                    refundCreated = createReceiptForOrder({
+                        kind: "refund",
+                        originalKind: record.kind,
+                        // Receipt items carry `unitPrice`; createReceiptForOrder
+                        // reads incoming items by `price`. Negate here — the
+                        // rest of the shape (qty, name, vatRate via the ...it
+                        // spread) carries over unchanged so the VAT breakdown
+                        // mirrors the original sale with every sign flipped.
+                        items: original.items.map(it => ({
+                            ...it, price: -it.unitPrice, qty: it.qty, name: it.name,
+                        })),
+                        total: -original.total,
+                        paymentMethod: original.paymentMethod,
+                        existingReceiptId: null, // always a fresh receipt/porad_cis — never reuse the original's
+                        description: `Storno účtenky ${original.number}`,
+                    });
+                    refundCreated.refundOf = order.receiptId;
+                    db.set(COL.receipts, refundCreated.id, refundCreated);
+                    order.refundReceiptId = refundCreated.id;
+                }
+            }
+
+            // Persist the order's new paymentStatus (and receiptId/
+            // refundReceiptId, if a receipt was just issued) BEFORE reporting
+            // to EET. sendEetForReceipt is a network round-trip bounded by its
+            // own multi-second budget — the money-side fact "this order is
+            // now paid/refunded" must be durable before that call even
+            // starts. If the process dies mid-await, the worst case must be a
+            // paid/refunded order the EET queue hasn't reported yet (the
+            // background retry worker catches up later), never the reverse:
+            // a reported sale with no corresponding paid/refunded order on
+            // disk.
             db.set(col, order.id, order);
             if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
+            if (refundCreated) await sendEetForReceipt(refundCreated.id);
         }
     } else if (record.kind === "reservation") {
         const { fileId, dateStr, dayIndex, startHour, endHour } = record.target;
@@ -1247,7 +1297,7 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
         id,
         number: nextReceiptNumber(issuedAt),
         issuedAt,
-        kind,                                   // "delivery" | "indoor" | "reservation"
+        kind,                                   // "delivery" | "indoor" | "reservation" | "refund"
         description: description || null,
         seller: { ...SERVER_CONFIG.business },  // snapshot — future config changes don't rewrite old receipts
         paymentMethod: paymentMethod || null,
