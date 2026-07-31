@@ -99,3 +99,67 @@ openssl rand -hex 32
 ```
 
 Výměna `JWT_SECRET` odhlásí všechny přihlášené (personál se prostě znovu přihlásí) a zneplatní zákazníkům tokeny „Objednat znovu".
+
+---
+
+## EET 2.0 před spuštěním
+
+Toto je kontrolní seznam pro **ostrý provoz** elektronické evidence tržeb
+(implementace: `src/server/eet.js`, `src/server/eet-queue.js`; design
+`docs/superpowers/specs/2026-07-31-eet2-integration-design.md`). Dokud
+nezaškrtneš všechno níže, nespouštěj to na produkci — buď to nebude fungovat,
+nebo (horší) to bude hlásit tržby špatně.
+
+- [ ] **Pokladní certifikát vydán v MOJE daně a převeden na PEM.** Node neumí
+      číst `.p12`, proto je nutná jednorázová konverze (ověřeno na testovacím
+      `.p12`/PEM páru při psaní tohoto dokumentu):
+      ```bash
+      mkdir -p secrets
+      openssl pkcs12 -in pokladni.p12 -clcerts -nokeys -out secrets/eet-cert.pem
+      openssl pkcs12 -in pokladni.p12 -nocerts -nodes  -out secrets/eet-key.pem
+      chmod 600 secrets/*.pem
+      ```
+      `secrets/` je v `.gitignore` — tyhle soubory se nikdy necommitují.
+- [ ] **`EET_ID_JEDNOTKY` vyplněno hodnotou z DIS+.** Nejde si ji vymyslet —
+      přiděluje ji portál. Musí mít aspoň 2 číslice a poslední musí být 1–4.
+      Špatný formát (např. `1`) finanční správa **stále přijme**, ale vrátí
+      varování kód 6 — takže žádná chybová hláška tě na problém neupozorní,
+      je potřeba to zkontrolovat ručně proti tomu, co je v DIS+.
+- [ ] **`EET_EIC` odpovídá EIČ v certifikátu.** Pokud necháš prázdné, použije
+      se `BUSINESS_DIC` — zkontroluj, že to je opravdu totéž EIČ, pod kterým
+      byl certifikát vydán.
+- [ ] **`EET_PLAYGROUND=false` a `EET_ENABLED=true`.** `EET_PLAYGROUND` je
+      **ten jediný přepínač**, který rozhoduje mezi testovacím prostředím
+      (`pg.trzbyeet.gov.cz`) a ostrým (`trzbyeet.gov.cz`) — výchozí hodnota
+      je bezpečná (`true`, tj. playground), takže dokud se to ručně
+      nepřepne, nemůže omylem odejít ostrá tržba.
+- [ ] **Testovací tržba v produkci v ověřovacím módu proběhla** (přes
+      `eet.verifyConnection` / ruční test), než se pustí první skutečná
+      platba.
+- [ ] **Text účtenky při nedostupnosti EET potvrzen účetní.** EET 2.0 zrušilo
+      BKP/PKP, takže co se má na účtenku vytisknout, když se tržbu nepodařilo
+      nahlásit před vytištěním, plyne ze ZoET §20 — ne z technického
+      rozhraní, a to je otázka pro účetní, ne něco, co se dá odvodit z kódu.
+      Aktuální (**prozatímní**) texty v `src/server/server.js`:
+      - `RECEIPT_EET_PENDING_NOTICE` (tržba čeká na odeslání):
+        „Tržba je evidována v běžném režimu."
+      - `RECEIPT_EET_FAILED_NOTICE` (tržba trvale selhala — nesmí tvrdit, že
+        je evidovaná):
+        „Tržba nebyla zaevidována u finanční správy."
+
+      Obě jsou označené v kódu jako `PROVISIONAL DEFAULT` — dokud je účetní
+      nepotvrdí (nebo nenahradí přesným zněním podle §20), jde o právní
+      riziko, ne o hotovou věc.
+- [ ] **`GET /api/eet/health` hlídán** (staff-only endpoint, vrací
+      `{ enabled, mode, pending, confirmed, failed, overdue, oldestPending,
+      lastError }`). Alert při **`overdue > 0`** — to znamená, že aspoň jedna
+      tržba propásla zákonnou 48hodinovou lhůtu k nahlášení.
+- [ ] **Sledování částečných refundů.** GoPay neposkytuje skutečně vrácenou
+      částku u částečné refundace, takže se u ní **automatický storno
+      nevygeneruje** — vznikne jen nulová „marker" účtenka a do logu jde
+      `console.error` ve tvaru
+      `EET: PARTIAL refund on reservation ... needs MANUAL EET storno
+      reporting ...`. Kdokoliv sleduje produkční logy, musí tohle chápat
+      jako úkol: **skutečnou vrácenou částku nahlásit finanční správě ručně**
+      (např. přes portál). Bez sledování logů se tohle ztratí a tržby budou
+      tiše podhlášené.
