@@ -56,3 +56,47 @@ test("escapeAttr escapes the C14N set but NOT the greater-than sign", () => {
 test("no whitespace between elements", () => {
     assert.ok(!/>\s+</.test(eet.buildTrzbaBody(SALE)));
 });
+
+// The "Data attributes are sorted alphabetically" test above is vacuous: every
+// call site already passes pairs in alphabetical order, so it would pass even
+// if attrs() never sorted at all. Exercise attrs() directly with deliberately
+// scrambled input so the sort itself is what's under test.
+test("attrs() sorts deliberately out-of-order pairs", () => {
+    const out = eet.attrs([
+        ["porad_cis", "2026-000001"],
+        ["eic_popl", "CZ00000019"],
+        ["celk_trzba", "349.00"],
+        ["id_pokl", "INDOOR"],
+        ["id_jednotky", "11"],
+        ["dat_trzby", "2026-07-31T11:55:00+02:00"],
+    ]);
+    const names = [...out.matchAll(/(\w+)="/g)].map(m => m[1]);
+    assert.deepStrictEqual(names, [...names].sort());
+    assert.deepStrictEqual(names, [
+        "celk_trzba", "dat_trzby", "eic_popl", "id_jednotky", "id_pokl", "porad_cis",
+    ]);
+});
+
+// The XSD's dateTime pattern requires a timezone offset (Z or +hh:mm/-hh:mm)
+// and forbids fractional seconds. A naive timestamp or one with milliseconds
+// (exactly what `new Date().toISOString()` produces) builds XML that looks
+// fine locally but is rejected by the live endpoint with no useful diagnostic.
+test("accepts a Z-offset timestamp", () => {
+    const sale = { ...SALE, datOdesl: "2026-07-31T12:00:00Z", datTrzby: "2026-07-31T11:55:00Z" };
+    assert.doesNotThrow(() => eet.buildTrzbaBody(sale));
+});
+
+test("accepts a +02:00-offset timestamp", () => {
+    // SALE's own fixture timestamps already carry +02:00 offsets.
+    assert.doesNotThrow(() => eet.buildTrzbaBody(SALE));
+});
+
+test("rejects a naive timestamp with no timezone offset", () => {
+    const sale = { ...SALE, datOdesl: "2026-07-31T12:00:00" };
+    assert.throws(() => eet.buildTrzbaBody(sale), /datOdesl/);
+});
+
+test("rejects a timestamp with milliseconds (the Date#toISOString() trap)", () => {
+    const sale = { ...SALE, datTrzby: "2026-07-31T12:00:00.000Z" };
+    assert.throws(() => eet.buildTrzbaBody(sale), /datTrzby/);
+});

@@ -62,6 +62,26 @@ function attrs(pairs) {
         .join("");
 }
 
+// The XSD's dateTime restriction (used by dat_odesl and dat_trzby) requires a
+// timezone offset and forbids fractional seconds:
+// \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z|[+\-]\d\d:\d\d). Node's own
+// `new Date().toISOString()` fails this (it appends ".000Z"), and a naive
+// local timestamp with no offset fails it too — both build XML that looks
+// fine here but is rejected only once it reaches the live endpoint, as an
+// opaque "invalid signature" error (the digest was computed over bytes the
+// server never re-derives the same way). Catch it here instead, with a
+// message that names the field.
+const EET_DATETIME_RE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z|[+\-]\d\d:\d\d)$/;
+
+function assertEetDateTime(fieldName, value) {
+    if (!EET_DATETIME_RE.test(String(value))) {
+        throw new Error(
+            `EET: ${fieldName} must match \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(Z|[+-]\\d\\d:\\d\\d) `
+            + `(a timezone offset, no fractional seconds) — got: ${value}`
+        );
+    }
+}
+
 // The XSD pattern for CastkaType demands exactly two decimal places:
 // ((0|-?[1-9]\d{0,7})\.\d\d|-0\.(0[1-9]|[1-9]\d)). A total of 349 serialised
 // as "349" is rejected outright with error code 3.
@@ -75,6 +95,9 @@ function formatAmount(value) {
 // form. This exact string is what gets digested AND what gets embedded in the
 // envelope — they must never diverge.
 function buildTrzbaBody(sale) {
+    assertEetDateTime("datOdesl", sale.datOdesl);
+    assertEetDateTime("datTrzby", sale.datTrzby);
+
     const hlavicka = attrs([
         ["dat_odesl", sale.datOdesl],
         ["overeni", sale.overeni ? "true" : undefined],
@@ -101,5 +124,5 @@ function buildTrzbaBody(sale) {
 
 module.exports = {
     EET_NS, SOAP_NS, WSSE_NS, WSU_NS, DS_NS, BODY_ID, TOKEN_ID,
-    escapeAttr, formatAmount, buildTrzbaBody,
+    escapeAttr, formatAmount, attrs, buildTrzbaBody,
 };
