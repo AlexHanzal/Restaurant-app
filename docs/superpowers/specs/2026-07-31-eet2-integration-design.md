@@ -189,9 +189,27 @@ left `pending` regardless.
 ### 5.1 Storage
 
 New collection `eet_records` (`COL.eetRecords`), keyed by `receipt.id`.
-Reusing the receipt id gives idempotency for free — the receipt system is
-already idempotent, so double-marking an order paid cannot produce a second
-EET record any more than it can produce a second receipt.
+Reusing the receipt id gives idempotency for the common case for free —
+calling `enqueue()` twice with the same `receipt.id` returns the existing
+record untouched.
+
+That is NOT sufficient on its own, though — it was falsified during
+implementation. `createReceiptForOrder`'s lost-receipt-row fallback (a
+receipt row that `existingReceiptId` pointed at has gone missing) mints a
+**new** receipt with a **new** id, and if the normal enqueue path ran for
+that new receipt, it would open a second, independent `eet_records` row —
+new `uuidZpravy`, new `datTrzby` — for a sale that had already been queued
+(and possibly already reported) under the old id. Same sale, reported twice.
+`enqueue()`'s `supersedesReceiptId` option is the actual fix: when the
+caller passes the old, lost receipt id alongside the new receipt, and a
+prior `eet_records` row exists under that old id, `enqueue()` carries the
+prior row's frozen identity (`uuidZpravy`, `datTrzby`, `poradCis`,
+`celkTrzba`, `state`) forward under the *new* receipt's id and removes the
+old row, rather than minting a fresh one. See the header comment on
+`enqueue()` in `eet-queue.js` for the full reasoning, and its own note there
+on the residual race this creates with an in-flight `sendOnce()` for the
+superseded id (fixed by a re-existence check right before `sendOnce`'s final
+persist).
 
 ```js
 {
@@ -201,7 +219,9 @@ EET record any more than it can produce a second receipt.
   uuidZpravy,            // generated ONCE, reused on every retry
   eic, idJednotky, idPokl, poradCis,
   datTrzby,              // frozen at first attempt
-  celkTrzba,             // string, two decimals
+  celkTrzba,             // number, not a string — formatted to two decimals
+                          // only at the XML-building boundary (formatAmount
+                          // in eet.js), never stored as formatted text
   prvniZaslani,          // true on first attempt, false on all retries
   state,                 // "pending" | "confirmed" | "failed"
   pok, warnings,
@@ -233,8 +253,26 @@ holds if the identity fields above stay frozen.
 | `id_jednotky` | `EET_ID_JEDNOTKY` | from DIS+; ≥2 digits ending 1–4 |
 | `id_pokl` | per-channel env var | DELIVERY / INDOOR / RESERVATION |
 | `porad_cis` | `receipt.number` | `2026-000001` — 11 chars, fits 25, charset legal |
-| `dat_trzby` | `receipt.issuedAt` | must carry timezone offset |
+| `dat_trzby` | `receipt.issuedAt`, milliseconds stripped by `enqueue()` | must match `\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z\|[+-]\d\d:\d\d)` — a timezone offset (`Z` or `±hh:mm`) and NO fractional seconds |
 | `celk_trzba` | `receipt.total` | `.toFixed(2)` — exactly two decimals |
+
+`receipt.issuedAt` is produced by `createReceiptForOrder` as
+`new Date().toISOString()`, which always appends milliseconds
+(`"...T10:00:00.731Z"`). The XSD pattern above forbids fractional seconds
+outright, so `enqueue()` strips them — via a plain regex on the fractional-
+seconds component only, not by round-tripping the value through
+`new Date(...).toISOString()`, which would additionally rewrite any
+non-UTC-offset timestamp (e.g. `"...+02:00"`) to UTC `Z` form. That
+rewrite would still be XSD-legal, but it's an unnecessary change to a value
+this module's whole contract is to freeze verbatim once assigned — so the
+strip is scoped to exactly the milliseconds and nothing else. This
+normalisation was added after a defect found in final review: every
+fixture in the test suite already used a clean, millisecond-free
+`issuedAt`, so nothing caught that `datTrzby` failed `assertEetDateTime` on
+every real sale in production, permanently stuck each record `pending` (the
+throw happens before there's a response to classify as `failed`) while the
+receipt printed a false "reported" notice. See
+`tests/unit/eet-queue-issuedat-normalisation.test.js`.
 
 ### 5.4 Which sales are reported
 
