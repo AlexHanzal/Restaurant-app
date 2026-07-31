@@ -460,11 +460,19 @@ async function applyGatewayPaymentState(record, state) {
                         ? `Rozvoz — objednávka ${order.id}`
                         : `Stůl ${order.tableName} — objednávka ${order.id}`,
                 });
-                if (receipt) await sendEetForReceipt(receipt.id);
                 order.receiptId = receipt.id;
                 receiptCreated = receipt;
             }
+            // Persist the order's new paymentStatus (and receiptId, if a
+            // receipt was just issued) BEFORE reporting to EET. sendEetForReceipt
+            // is a network round-trip bounded by its own multi-second budget —
+            // the money-side fact "this order is now paid" must be durable
+            // before that call even starts. If the process dies mid-await, the
+            // worst case must be a paid order the EET queue hasn't reported yet
+            // (the background retry worker catches up later), never the
+            // reverse: a reported sale with no corresponding paid order on disk.
             db.set(col, order.id, order);
+            if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
         }
     } else if (record.kind === "reservation") {
         const { fileId, dateStr, dayIndex, startHour, endHour } = record.target;
@@ -482,7 +490,6 @@ async function applyGatewayPaymentState(record, state) {
                         existingReceiptId: primarySlot.receiptId,
                         description: `Rezervace ${data.className} — ${dateStr}`,
                     });
-                    if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
                 }
             }
             for (let h = startHour; h <= endHour; h++) {
@@ -493,6 +500,7 @@ async function applyGatewayPaymentState(record, state) {
                 }
             }
             db.set(COL.timetables, fileId, data);
+            if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
         }
     }
 
@@ -3131,9 +3139,9 @@ function setupAPIRoutes() {
             existingReceiptId: order.receiptId,
             description: `Rozvoz — objednávka ${order.id}`,
         });
-        if (receipt) await sendEetForReceipt(receipt.id);
         order.receiptId = receipt.id;
         db.set(COL.orders, order.id, order);
+        if (receipt) await sendEetForReceipt(receipt.id);
         broadcastBoardEvent();
         res.json({ success: true, order, receiptId: receipt.id });
     });
@@ -3398,7 +3406,6 @@ function setupAPIRoutes() {
                     existingReceiptId: primarySlot.receiptId,
                     description: `Rezervace ${data.className} — ${dateStr}`,
                 });
-                if (receipt) await sendEetForReceipt(receipt.id);
             }
 
             for (let h = startHour; h <= endHour; h++) {
@@ -3409,6 +3416,7 @@ function setupAPIRoutes() {
             }
 
             db.set(COL.timetables, fileId, data);
+            if (receipt) await sendEetForReceipt(receipt.id);
             broadcastBoardEvent();
             res.json({ success: true, receiptId: receipt ? receipt.id : null });
         } catch (e) {
@@ -3505,9 +3513,9 @@ function setupAPIRoutes() {
             existingReceiptId: order.receiptId,
             description: `Stůl ${order.tableName} — objednávka ${order.id}`,
         });
-        if (receipt) await sendEetForReceipt(receipt.id);
         order.receiptId = receipt.id;
         db.set(COL.indoorOrders, order.id, order);
+        if (receipt) await sendEetForReceipt(receipt.id);
         broadcastBoardEvent();
         res.json({ success: true, order, receiptId: receipt.id });
     });

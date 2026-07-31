@@ -123,13 +123,31 @@ function enqueue(db, col, { receipt, kind, originalKind, config, supersedesRecei
 // fetch.
 async function sendOnce(db, col, id, { config, credentials, client = eet }) {
     const record = db.get(col, id);
-    if (!record) throw new Error(`EET: no queue record ${id}`);
+    // A missing record should be unreachable from the payment hot path: every
+    // caller of sendOnce (sendEetForReceipt in server.js, and the Task 8
+    // retry worker walking the eet_records collection) only ever does so for
+    // an id that createReceiptForOrder()/enqueue() just wrote or that is
+    // already sitting in the collection. But "should be unreachable" is not
+    // "throw is safe" — this function's whole contract (see the block
+    // comment above) is that it never throws on the hot path, full stop. So
+    // even this defensive case logs and returns null instead.
+    if (!record) {
+        console.error(`EET: no queue record ${id}`);
+        return null;
+    }
 
     // A confirmed sale already has its POK — resending it would report the
     // SAME sale a second time under a fresh prvni_zaslani=false envelope,
     // which the tax authority has no reason to treat as anything other than
     // a second, independent trzba. Once confirmed, this function is a no-op.
     if (record.state === "confirmed") return record;
+
+    // A terminal failure means every retry for the rest of the 48h window
+    // would hit the exact same rejection (bad signature, malformed request,
+    // etc.) — retrying can't succeed, it can only burn time and spam logs.
+    // Once failed, this function is a no-op too; a human has to fix whatever
+    // caused the terminal error and re-open the record out of band.
+    if (record.state === "failed") return record;
 
     // These three fields are the entire reason a retry reads as a RETRY and
     // not a second sale (see the header comment in this file and in
@@ -181,7 +199,22 @@ async function sendOnce(db, col, id, { config, credentials, client = eet }) {
         record.lastError = e.message;
     }
 
-    return db.set(col, id, record);
+    // The persist itself has to be inside the protected region too: this
+    // whole function sits on the payment hot path (see the block comment
+    // above sendOnce), and its documented contract is that it never throws.
+    // A storage failure here (disk full, whatever) can't be allowed to
+    // propagate just because it happens to be the very last statement — that
+    // would silently break the "never throws" contract for exactly the kind
+    // of failure it exists to protect against. Log it and swallow it instead;
+    // the in-memory record already reflects the outcome of this attempt, and
+    // the next retry (worker or another hot-path call) will try the write
+    // again from db.get().
+    try {
+        return db.set(col, id, record);
+    } catch (e) {
+        console.error(`EET: failed to persist queue record ${id} after send attempt:`, e.message);
+        return null;
+    }
 }
 
 module.exports = {

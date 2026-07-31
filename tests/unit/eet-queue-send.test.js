@@ -82,3 +82,39 @@ test("a confirmed record is never re-sent", async () => {
     await queue.sendOnce(db, "eet", "r1", { config: CONFIG, credentials: CREDS, client });
     assert.strictEqual(calls, 1);
 });
+
+test("a failed (terminal) record is never re-sent", async () => {
+    const db = fakeDb(); seed(db);
+    let calls = 0;
+    const client = { sendTrzba: async () => { calls++; return { ok: false, errorCode: 4, errorText: "Neplatny podpis SOAP zpravy", warnings: [] }; } };
+    const first = await queue.sendOnce(db, "eet", "r1", { config: CONFIG, credentials: CREDS, client });
+    assert.strictEqual(first.state, "failed");
+    assert.strictEqual(calls, 1);
+
+    const second = await queue.sendOnce(db, "eet", "r1", { config: CONFIG, credentials: CREDS, client });
+    assert.strictEqual(calls, 1, "a terminal failure must never be retried — it would fail identically forever");
+    assert.strictEqual(second.state, "failed");
+});
+
+test("sendOnce never throws even when the final persist fails", async () => {
+    const db = fakeDb();
+    seed(db);
+    const originalSet = db.set;
+    db.set = (c, id, v) => { throw new Error("disk full"); };
+    const client = { sendTrzba: async () => ({ ok: true, pok: "abc-ff", warnings: [] }) };
+
+    await assert.doesNotReject(
+        queue.sendOnce(db, "eet", "r1", { config: CONFIG, credentials: CREDS, client }),
+        "sendOnce is documented to never throw, even if the storage write fails"
+    );
+
+    db.set = originalSet;
+});
+
+test("sendOnce never throws for a missing queue record", async () => {
+    const db = fakeDb();
+    await assert.doesNotReject(
+        queue.sendOnce(db, "eet", "does-not-exist", { config: CONFIG, credentials: CREDS, client: { sendTrzba: async () => ({ ok: true }) } }),
+        "sendOnce is documented to never throw — a missing record must be logged and swallowed, not thrown"
+    );
+});
