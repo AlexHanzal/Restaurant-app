@@ -1158,6 +1158,26 @@ function paymentMethodLabel(method) {
 // PROVISIONAL DEFAULT — must be confirmed before go-live.
 const RECEIPT_EET_PENDING_NOTICE = "Tržba je evidována v běžném režimu.";
 
+// Companion to RECEIPT_EET_PENDING_NOTICE, for the DISTINCT case where
+// receipt.eet.state is "failed" — eet-queue.js's sendOnce() has classified
+// the rejection as terminal (see its classifyError(...) === "terminal"
+// branch) and given up for good, rather than merely not having gotten to
+// this sale yet. Reusing the pending wording for this case would be a false
+// statement on a legal document: RECEIPT_EET_PENDING_NOTICE asserts the sale
+// IS being recorded ("evidována"), and for a sale that permanently failed to
+// reach the tax authority that is simply not true.
+//
+// Same root cause as the comment above: EET 2.0 removed BKP/PKP, so there is
+// no fallback code to print here either, and what ZoET §20 actually requires
+// a receipt to say in this state is, again, a question for the restaurant's
+// accountant — NOT something to invent here. The one hard requirement this
+// text MUST satisfy in the meantime is negative: it must NOT claim the sale
+// was recorded/evidenced. Keep it factual and plain until that answer comes
+// back.
+//
+// PROVISIONAL DEFAULT — must be confirmed before go-live.
+const RECEIPT_EET_FAILED_NOTICE = "Tržba nebyla zaevidována u finanční správy.";
+
 // Top-down VAT extraction from a VAT-inclusive (gross) amount: the amount
 // already charged includes VAT, so VAT = gross × rate/(100+rate). This is
 // the correct method for restaurant receipts, where menu prices are always
@@ -1274,6 +1294,27 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
     return receipt;
 }
 
+// Guards sendEetForReceipt against two concurrent calls for the SAME receipt
+// — e.g. the payment path's own best-effort send racing the Task 8 retry
+// worker's next tick (this happens for real: right after a process restart,
+// or whenever the payment-path send is slow enough that the worker's timer
+// fires before it resolves). Without this, both calls read the same
+// `pending` eet_records row via db.get() before either has written back, so
+// both proceed to call eetQueue.sendOnce() — and sendOnce's own
+// confirmed/failed early-return (see eet-queue.js) only protects against a
+// call that starts AFTER an earlier one has already finished and persisted;
+// it does nothing for two calls already in flight at once. The tax service
+// has no way to tell that apart from a genuine second sale of the same
+// trzba, so this is not merely redundant work, it is duplicate reporting to
+// a government system. It also independently fixes the get→mutate→set race
+// on receipt.eet itself: with only one send in flight per receiptId, there
+// is only one writer at a time, so the loser can no longer clobber the
+// winner's write with a stale copy.
+//
+// A plain module-level Set is sufficient because this is a single-process
+// Node server (no cross-process/cluster coordination needed here).
+const eetSendsInFlight = new Set();
+
 // Best-effort immediate send, bounded by the mezní doba odezvy (the 5s
 // timeoutMs baked into SERVER_CONFIG.eet and enforced inside eet.sendTrzba
 // itself). This is ONLY an optimisation to get a POK onto the receipt before
@@ -1284,12 +1325,21 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
 // order paid must never fail because the tax authority is having a bad day —
 // see the header comment at the top of eet-queue.js.
 async function sendEetForReceipt(receiptId) {
-    const creds = eetCredentials();
-    if (!creds) {
-        console.log(`🧾 [EET disabled] receipt ${receiptId} queued but not transmitted`);
+    // See eetSendsInFlight comment above: if a send for this receipt is
+    // already running (payment path vs. Task 8 worker, or two worker ticks
+    // overlapping), don't start a second one — just let the in-flight call
+    // own this receipt's outcome.
+    if (eetSendsInFlight.has(receiptId)) {
+        console.log(`🧾 EET send already in flight for receipt ${receiptId} — skipping duplicate call to avoid double-reporting to the tax authority`);
         return null;
     }
+    eetSendsInFlight.add(receiptId);
     try {
+        const creds = eetCredentials();
+        if (!creds) {
+            console.log(`🧾 [EET disabled] receipt ${receiptId} queued but not transmitted`);
+            return null;
+        }
         const record = await eetQueue.sendOnce(db, COL.eetRecords, receiptId, {
             config: SERVER_CONFIG.eet,
             credentials: creds,
@@ -1315,6 +1365,14 @@ async function sendEetForReceipt(receiptId) {
         // never take an order-marked-paid response down with it.
         console.error(`EET send failed for receipt ${receiptId}:`, e.message);
         return null;
+    } finally {
+        // MUST clear even when the try block threw — an in-flight guard
+        // that can get stuck "on" would permanently block this receipt from
+        // ever being sent again (by either the payment path or the Task 8
+        // worker), which is a worse failure mode than the race it guards
+        // against. Duplicate reporting is a compliance risk; a permanently
+        // stuck receipt is a guaranteed compliance failure.
+        eetSendsInFlight.delete(receiptId);
     }
 }
 
@@ -1387,8 +1445,18 @@ function renderReceiptHtml(receipt) {
     // EET 2.0: mirrors the `receipt.eet` block sendEetForReceipt() attaches
     // after a (best-effort or retried) send. No block at all means the sale
     // wasn't reportable (e.g. cash-exempt or EET disabled) — nothing to show.
-    // A block without a POK means it's still queued/failed — show the
-    // provisional ZoET §20 notice instead of a fabricated code. A playground
+    // A block without a POK means no confirmation has been received yet —
+    // but "not confirmed" is NOT one single case. It splits on
+    // receipt.eet.state (set verbatim from the eet_records row by
+    // sendEetForReceipt, see above): "pending" genuinely may still succeed on
+    // a later retry, so the pending notice's present-tense claim is at least
+    // arguably still true; "failed" is eet-queue.js's sendOnce() having
+    // classified the rejection as terminal and given up for good — showing
+    // the SAME reassuring pending text there would tell a customer/inspector
+    // a sale is being recorded when it demonstrably is not and never will be
+    // via this record. Two distinct constants, two distinct branches — see
+    // RECEIPT_EET_FAILED_NOTICE's own comment for why the wording differs
+    // and why it is deliberately NOT invented legal language. A playground
     // POK is not a legally valid confirmation, so it MUST be marked as such —
     // a test receipt reaching a real customer would be a serious failure.
     const eetHtml = !receipt.eet
@@ -1396,7 +1464,9 @@ function renderReceiptHtml(receipt) {
         : receipt.eet.pok
             ? `<p class="eet"><strong>POK:</strong> ${escapeHtml(receipt.eet.pok)}<br>
                <span class="eet-mode${receipt.eet.mode === "playground" ? " playground" : ""}">${receipt.eet.mode === "playground" ? "TESTOVACÍ PROSTŘEDÍ — NEPLATNÁ ÚČTENKA" : "Tržba evidována"}</span></p>`
-            : `<p class="eet">${escapeHtml(RECEIPT_EET_PENDING_NOTICE)}</p>`;
+            : receipt.eet.state === "failed"
+                ? `<p class="eet eet-failed">${escapeHtml(RECEIPT_EET_FAILED_NOTICE)}</p>`
+                : `<p class="eet">${escapeHtml(RECEIPT_EET_PENDING_NOTICE)}</p>`;
 
     return `<!DOCTYPE html>
 <html lang="cs">
@@ -1437,6 +1507,11 @@ function renderReceiptHtml(receipt) {
     .eet { margin: 16px 0; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
     .eet-mode { color: #555; }
     .eet-mode.playground { color: #b00020; font-weight: 700; }
+    /* Failed EET state must read as visibly distinct from the merely-pending
+       one (see RECEIPT_EET_FAILED_NOTICE) — same red used elsewhere on this
+       page for the playground warning, reused here rather than inventing a
+       second alarm color. No inline style="..." — CSP forbids it here. */
+    .eet-failed { border-color: #b00020; background: #fdecea; color: #7a0016; font-weight: 600; }
     .footer { margin-top: 28px; text-align: center; color: #888; font-size: 12px; }
     @media print {
         body { margin: 0 auto; }
