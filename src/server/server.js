@@ -1149,6 +1149,15 @@ function paymentMethodLabel(method) {
     return PAYMENT_METHOD_LABELS[method] || "Neuvedeno";
 }
 
+// §2.1 of the design spec — EET 2.0 removed BKP/PKP, so there is no fallback
+// code to print when a sale could not be reported before the receipt was
+// issued. What ZoET §20 requires in that situation is a question for the
+// restaurant's accountant, NOT something to invent here. This constant is that
+// answer's only home; change it here and nowhere else.
+//
+// PROVISIONAL DEFAULT — must be confirmed before go-live.
+const RECEIPT_EET_PENDING_NOTICE = "Tržba je evidována v běžném režimu.";
+
 // Top-down VAT extraction from a VAT-inclusive (gross) amount: the amount
 // already charged includes VAT, so VAT = gross × rate/(100+rate). This is
 // the correct method for restaurant receipts, where menu prices are always
@@ -1281,10 +1290,25 @@ async function sendEetForReceipt(receiptId) {
         return null;
     }
     try {
-        return await eetQueue.sendOnce(db, COL.eetRecords, receiptId, {
+        const record = await eetQueue.sendOnce(db, COL.eetRecords, receiptId, {
             config: SERVER_CONFIG.eet,
             credentials: creds,
         });
+
+        // Mirror the outcome onto the receipt so the printable page and the
+        // receipts API need no knowledge of the eet_records collection.
+        const receipt = db.get(COL.receipts, receiptId);
+        if (receipt && record) {
+            receipt.eet = {
+                pok: record.pok,
+                uuidZpravy: record.uuidZpravy,
+                datTrzby: record.datTrzby,
+                mode: SERVER_CONFIG.eet.playground ? "playground" : "production",
+                state: record.state,
+            };
+            db.set(COL.receipts, receiptId, receipt);
+        }
+        return record;
     } catch (e) {
         // sendOnce is documented to never throw, but this call sits directly
         // on the payment hot path — an unforeseen bug in sendOnce must still
@@ -1360,6 +1384,20 @@ function renderReceiptHtml(receipt) {
 
     const seller = receipt.seller || {};
 
+    // EET 2.0: mirrors the `receipt.eet` block sendEetForReceipt() attaches
+    // after a (best-effort or retried) send. No block at all means the sale
+    // wasn't reportable (e.g. cash-exempt or EET disabled) — nothing to show.
+    // A block without a POK means it's still queued/failed — show the
+    // provisional ZoET §20 notice instead of a fabricated code. A playground
+    // POK is not a legally valid confirmation, so it MUST be marked as such —
+    // a test receipt reaching a real customer would be a serious failure.
+    const eetHtml = !receipt.eet
+        ? ""
+        : receipt.eet.pok
+            ? `<p class="eet"><strong>POK:</strong> ${escapeHtml(receipt.eet.pok)}<br>
+               <span class="eet-mode${receipt.eet.mode === "playground" ? " playground" : ""}">${receipt.eet.mode === "playground" ? "TESTOVACÍ PROSTŘEDÍ — NEPLATNÁ ÚČTENKA" : "Tržba evidována"}</span></p>`
+            : `<p class="eet">${escapeHtml(RECEIPT_EET_PENDING_NOTICE)}</p>`;
+
     return `<!DOCTYPE html>
 <html lang="cs">
 <head>
@@ -1396,6 +1434,9 @@ function renderReceiptHtml(receipt) {
     .vat-table { margin-top: 4px; }
     .vat-table th { border-bottom: 1px solid #999; font-weight: 600; font-size: 12px; color: #555; }
     .not-vat-payer { font-style: italic; color: #555; margin: 16px 0; }
+    .eet { margin: 16px 0; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+    .eet-mode { color: #555; }
+    .eet-mode.playground { color: #b00020; font-weight: 700; }
     .footer { margin-top: 28px; text-align: center; color: #888; font-size: 12px; }
     @media print {
         body { margin: 0 auto; }
@@ -1421,6 +1462,8 @@ function renderReceiptHtml(receipt) {
         <div><span class="label">Datum a čas vystavení</span><br>${formatDateTime(receipt.issuedAt)}</div>
         <div style="text-align:right"><span class="label">Způsob platby</span><br>${escapeHtml(receipt.paymentMethodLabel)}</div>
     </div>
+
+    ${eetHtml}
 
     <table>
         <thead>
