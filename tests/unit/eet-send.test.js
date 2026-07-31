@@ -207,3 +207,48 @@ test("sendTrzba: sends the exact SOAPAction and Content-Type headers", async () 
     assert.strictEqual(calledOpts.headers["Content-Type"], "text/xml; charset=utf-8");
     assert.strictEqual(calledOpts.headers.SOAPAction, "http://fs.gov.cz/eet/OdeslaniTrzby");
 });
+
+// ----------------------------------------------------------------------------
+// Finding 4 (Critical): AbortSignal.timeout aborts the WHOLE fetch lifecycle,
+// not just the connect phase — a server that sends headers promptly and then
+// stalls or drops mid-body causes the abort (or a bare network error) to
+// surface while awaiting res.text(), not while awaiting doFetch(...). The old
+// code only wrapped the doFetch(...) call in try/catch, so a body-read
+// failure propagated with no .retryable at all and a caller branching on
+// err.retryable would treat a genuinely-retryable transport failure as
+// terminal, silently dropping a sale EET requires reporting within 48 hours.
+// fakeResponse's text() always resolves synchronously with a string, which is
+// exactly why this gap had no test and went unnoticed — these use a text()
+// that rejects instead, both with a generic error and with an
+// AbortError-shaped one, the same failure modes already covered above for the
+// connect phase.
+// ----------------------------------------------------------------------------
+
+function fakeResponseBodyRejects(err) {
+    return { ok: true, status: 200, text: async () => { throw err; } };
+}
+
+test("sendTrzba: a body-read failure after a promise 2xx response is retryable", async () => {
+    const fetchImpl = async () => fakeResponseBodyRejects(new Error("ECONNRESET"));
+    await assert.rejects(
+        () => eet.sendTrzba({ credentials: makeCreds(), fetchImpl }, SALE),
+        (err) => {
+            assert.strictEqual(err.retryable, true, "body-read transport failures must be retryable");
+            assert.strictEqual(err.message, "ECONNRESET");
+            return true;
+        },
+    );
+});
+
+test("sendTrzba: an abort during body streaming (headers already sent) is retryable", async () => {
+    const fetchImpl = async () => fakeResponseBodyRejects(
+        new DOMException("The operation was aborted due to timeout", "AbortError"),
+    );
+    await assert.rejects(
+        () => eet.sendTrzba({ credentials: makeCreds(), fetchImpl }, SALE),
+        (err) => {
+            assert.strictEqual(err.retryable, true, "an abort mid-body-read must be retryable");
+            return true;
+        },
+    );
+});

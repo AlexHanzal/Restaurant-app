@@ -282,17 +282,23 @@ async function sendTrzba(config, sale) {
     // all (a real cash-desk deploy always falls through to global fetch).
     const doFetch = config.fetchImpl || fetch;
 
-    // Everything that fails BEFORE an HTTP response comes back — a timeout,
-    // a DNS failure, ECONNRESET, a TLS handshake failure — is a transport
-    // problem, not an EET verdict: the server never got to judge the sale.
-    // EET legally requires the sale to be reported within 48 hours, so a
-    // caller that branches on err.retryable MUST see these as retryable, or
-    // a timed-out sale is silently dropped instead of retried. Left
-    // unguarded, AbortSignal.timeout's rejection (and any other fetch
-    // rejection) would propagate with no .retryable at all — only the
-    // manually-built non-2xx error below got the flag. Wrap the whole call
-    // so nothing transport-level can slip through unflagged.
+    // Everything that fails BEFORE the EET server hands back a parseable
+    // response body — a connect-phase timeout, a DNS failure, ECONNRESET, a
+    // TLS handshake failure, OR a stall/drop while streaming the body — is a
+    // transport problem, not an EET verdict: the server never got to judge
+    // the sale. EET legally requires the sale to be reported within 48
+    // hours, so a caller that branches on err.retryable MUST see all of
+    // these as retryable, or a sale is silently dropped instead of retried.
+    // Crucially, AbortSignal.timeout aborts the WHOLE fetch lifecycle, not
+    // just the connect phase — a server that sends headers promptly and
+    // then stalls mid-body still ends up rejecting the SAME signal, but that
+    // rejection happens while awaiting res.text(), not while awaiting
+    // doFetch(...). So res.text() MUST be read inside this same try, or a
+    // body-read failure propagates with no .retryable at all (only the
+    // manually-built non-2xx error below would have the flag). Do not "tidy"
+    // the body read back out of this block — that reopens exactly this gap.
     let res;
+    let text;
     try {
         res = await doFetch(url, {
             method: "POST",
@@ -300,14 +306,15 @@ async function sendTrzba(config, sale) {
             body: Buffer.from(envelope, "utf8"),
             signal: AbortSignal.timeout(timeoutMs),
         });
+        text = await res.text();
     } catch (err) {
         // AbortSignal.timeout surfaces as a DOMException named "TimeoutError"
         // (some runtimes instead name it "AbortError" for the same cause)
         // with a message like "The operation was aborted due to timeout" —
         // it says nothing about which call it was or how long it waited.
         // Replace it with a message that does. Any other transport failure
-        // (DNS/ECONNRESET/TLS) keeps its original message untouched; it only
-        // gains the retryable flag.
+        // (DNS/ECONNRESET/TLS, at connect time OR mid-body) keeps its
+        // original message untouched; it only gains the retryable flag.
         if (err.name === "TimeoutError" || err.name === "AbortError") {
             const timeoutErr = new Error(`EET: request timed out after ${timeoutMs}ms`);
             timeoutErr.retryable = true;
@@ -318,7 +325,6 @@ async function sendTrzba(config, sale) {
         throw err;
     }
 
-    const text = await res.text();
     if (!res.ok) {
         const err = new Error(`EET HTTP ${res.status}`);
         err.retryable = true;
