@@ -108,4 +108,83 @@ function enqueue(db, col, { receipt, kind, originalKind, config, supersedesRecei
     return db.set(col, receipt.id, record);
 }
 
-module.exports = { DEADLINE_MS, BACKOFF_MS, BACKOFF_TAIL_MS, isEvidovanaTrzba, registerFor, nextAttemptDelay, enqueue };
+// One send attempt against an existing record. Never throws — a transport
+// failure (or any other unexpected problem) is recorded on the record and
+// left pending, because a thrown error here runs on the payment hot path
+// (createReceiptForOrder's caller just marked money as received) and a throw
+// there would keep the order from ever being flagged paid. Compare: enqueue()
+// above is allowed to be strict, because nothing has committed to a network
+// call yet; sendOnce() is not, because by the time it runs the queue record
+// already exists and the retry worker (Task 8) is the actual safety net.
+//
+// `client` is injected so tests can drive the whole state machine with no
+// network at all — production always passes the real eet module (the
+// default parameter below), which is the only caller that ever touches
+// fetch.
+async function sendOnce(db, col, id, { config, credentials, client = eet }) {
+    const record = db.get(col, id);
+    if (!record) throw new Error(`EET: no queue record ${id}`);
+
+    // A confirmed sale already has its POK — resending it would report the
+    // SAME sale a second time under a fresh prvni_zaslani=false envelope,
+    // which the tax authority has no reason to treat as anything other than
+    // a second, independent trzba. Once confirmed, this function is a no-op.
+    if (record.state === "confirmed") return record;
+
+    // These three fields are the entire reason a retry reads as a RETRY and
+    // not a second sale (see the header comment in this file and in
+    // server.js's createReceiptForOrder): uuidZpravy and datTrzby are read
+    // straight off the stored record — never regenerated, never `now()` — and
+    // prvniZaslani is true only for the very first attempt (attempts === 0
+    // BEFORE we increment below).
+    const sale = {
+        uuidZpravy: record.uuidZpravy,
+        datOdesl: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        datTrzby: record.datTrzby,
+        prvniZaslani: record.attempts === 0,
+        eic: record.eic,
+        idJednotky: record.idJednotky,
+        idPokl: record.idPokl,
+        poradCis: record.poradCis,
+        celkTrzba: record.celkTrzba,
+    };
+
+    record.attempts += 1;
+    record.lastAttemptAt = new Date().toISOString();
+    record.prvniZaslani = false; // stored field mirrors the sale we just sent/are sending — never true again after attempt 1
+
+    try {
+        const res = await client.sendTrzba({ ...config, credentials }, sale);
+        record.warnings = res.warnings || [];
+
+        if (res.ok) {
+            record.state = "confirmed";
+            record.pok = res.pok;
+            record.sentAt = record.lastAttemptAt;
+            record.lastError = null;
+        } else if (eet.classifyError(res.errorCode) === "terminal") {
+            // Terminal means retrying would fail identically for the full 48h
+            // window and hide the fault from staff — stop here instead of
+            // burning the deadline on a doomed retry loop.
+            record.state = "failed";
+            record.lastError = `EET ${res.errorCode}: ${res.errorText}`;
+            console.error(`❌ EET terminal error on receipt ${record.receiptNumber} — ${record.lastError}`);
+        } else {
+            // Retryable EET-level rejection (-1 / 8): stay pending, the
+            // background worker (Task 8) will try again per nextAttemptDelay.
+            record.lastError = `EET ${res.errorCode}: ${res.errorText}`;
+        }
+    } catch (e) {
+        // Transport-level failure (timeout, DNS, TLS, non-2xx) — eet.js
+        // always marks these retryable, and there is nothing else to do here
+        // but record the reason and leave the record pending for the worker.
+        record.lastError = e.message;
+    }
+
+    return db.set(col, id, record);
+}
+
+module.exports = {
+    DEADLINE_MS, BACKOFF_MS, BACKOFF_TAIL_MS,
+    isEvidovanaTrzba, registerFor, nextAttemptDelay, enqueue, sendOnce,
+};

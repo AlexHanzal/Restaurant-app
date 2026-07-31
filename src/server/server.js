@@ -460,6 +460,7 @@ async function applyGatewayPaymentState(record, state) {
                         ? `Rozvoz — objednávka ${order.id}`
                         : `Stůl ${order.tableName} — objednávka ${order.id}`,
                 });
+                if (receipt) await sendEetForReceipt(receipt.id);
                 order.receiptId = receipt.id;
                 receiptCreated = receipt;
             }
@@ -481,6 +482,7 @@ async function applyGatewayPaymentState(record, state) {
                         existingReceiptId: primarySlot.receiptId,
                         description: `Rezervace ${data.className} — ${dateStr}`,
                     });
+                    if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
                 }
             }
             for (let h = startHour; h <= endHour; h++) {
@@ -1253,6 +1255,35 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
     }
 
     return receipt;
+}
+
+// Best-effort immediate send, bounded by the mezní doba odezvy (the 5s
+// timeoutMs baked into SERVER_CONFIG.eet and enforced inside eet.sendTrzba
+// itself). This is ONLY an optimisation to get a POK onto the receipt before
+// it prints — the queue record created by createReceiptForOrder() above is
+// already the source of truth, so every error path here is deliberately
+// swallowed rather than propagated: a failure just means the receipt prints
+// without a POK and the retry worker (Task 8) picks it up later. Marking an
+// order paid must never fail because the tax authority is having a bad day —
+// see the header comment at the top of eet-queue.js.
+async function sendEetForReceipt(receiptId) {
+    const creds = eetCredentials();
+    if (!creds) {
+        console.log(`🧾 [EET disabled] receipt ${receiptId} queued but not transmitted`);
+        return null;
+    }
+    try {
+        return await eetQueue.sendOnce(db, COL.eetRecords, receiptId, {
+            config: SERVER_CONFIG.eet,
+            credentials: creds,
+        });
+    } catch (e) {
+        // sendOnce is documented to never throw, but this call sits directly
+        // on the payment hot path — an unforeseen bug in sendOnce must still
+        // never take an order-marked-paid response down with it.
+        console.error(`EET send failed for receipt ${receiptId}:`, e.message);
+        return null;
+    }
 }
 
 function escapeHtml(str) {
@@ -3085,7 +3116,7 @@ function setupAPIRoutes() {
     // POST — driver/waiter marks a cash/card-on-delivery order as paid at handoff.
     // (Online-card orders get marked paid via the gateway webhook instead —
     // see /payments/gopay/webhook below, not this route.)
-    app.post(`${api}/orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), (req, res) => {
+    app.post(`${api}/orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), async (req, res) => {
         const order = db.get(COL.orders, req.params.id);
         if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
         if (order.paymentMethod === "online_card") {
@@ -3100,6 +3131,7 @@ function setupAPIRoutes() {
             existingReceiptId: order.receiptId,
             description: `Rozvoz — objednávka ${order.id}`,
         });
+        if (receipt) await sendEetForReceipt(receipt.id);
         order.receiptId = receipt.id;
         db.set(COL.orders, order.id, order);
         broadcastBoardEvent();
@@ -3347,7 +3379,7 @@ function setupAPIRoutes() {
     // POST — waiter marks a reservation-attached order as paid. Same
     // fileId/dateStr/dayIndex/startHour/endHour addressing as kitchen/indoor/status,
     // so it marks every hour slot the booking occupies at once.
-    app.post(`${api}/kitchen/reservation/mark-paid`, csrf.requireCsrf, requireAuth, V.validate(V.kitchenReservationMarkPaidSchema), (req, res) => {
+    app.post(`${api}/kitchen/reservation/mark-paid`, csrf.requireCsrf, requireAuth, V.validate(V.kitchenReservationMarkPaidSchema), async (req, res) => {
         const { fileId, dateStr, dayIndex, startHour, endHour } = req.body || {};
         try {
             const data = db.get(COL.timetables, fileId);
@@ -3366,6 +3398,7 @@ function setupAPIRoutes() {
                     existingReceiptId: primarySlot.receiptId,
                     description: `Rezervace ${data.className} — ${dateStr}`,
                 });
+                if (receipt) await sendEetForReceipt(receipt.id);
             }
 
             for (let h = startHour; h <= endHour; h++) {
@@ -3460,7 +3493,7 @@ function setupAPIRoutes() {
     });
 
     // POST — waiter marks a walk-in table order as paid (cash / card terminal).
-    app.post(`${api}/indoor-orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), (req, res) => {
+    app.post(`${api}/indoor-orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), async (req, res) => {
         const order = db.get(COL.indoorOrders, req.params.id);
         if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
         order.paymentStatus = "paid";
@@ -3472,6 +3505,7 @@ function setupAPIRoutes() {
             existingReceiptId: order.receiptId,
             description: `Stůl ${order.tableName} — objednávka ${order.id}`,
         });
+        if (receipt) await sendEetForReceipt(receipt.id);
         order.receiptId = receipt.id;
         db.set(COL.indoorOrders, order.id, order);
         broadcastBoardEvent();
