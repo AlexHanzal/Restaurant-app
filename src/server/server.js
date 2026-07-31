@@ -143,6 +143,7 @@ const db = require("./db");
 const minify = require("./minify"); // esbuild minify-on-serve for .js/.css — see minify.js, same design doc §2
 const gopay = require("./gopay");
 const eet = require("./eet");
+const eetQueue = require("./eet-queue");
 const security = require("./security");
 const csrf = require("./csrf"); // CSRF double-submit-cookie protection — see csrf.js
 const V = require("./validation"); // input validation (zod schemas + validate()/validateParams() middleware) — see validation.js
@@ -1152,7 +1153,7 @@ function vatFromGross(grossAmount, ratePercent) {
 // already set (idempotent — see comment block above). `items` uses either
 // cart shape ({ name, price, qty, vatRate } or { item, price, qty, vatRate })
 // — same shapes priceOrderItems() already normalizes into every order.
-function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description }) {
+function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description, gopayInstrument = null, originalKind = null }) {
     if (existingReceiptId) {
         const existing = db.get(COL.receipts, existingReceiptId);
         if (existing) return existing;
@@ -1214,6 +1215,20 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
     };
 
     db.set(COL.receipts, id, receipt);
+
+    // EET 2.0: enqueue synchronously, in the same breath as the receipt. This
+    // function stays sync on purpose — it has five call sites and runs inside
+    // applyGatewayPaymentState, so making it async would ripple everywhere.
+    // Sending is a separate awaited step; see sendEetForReceipt().
+    if (eetQueue.isEvidovanaTrzba(paymentMethod, gopayInstrument)) {
+        eetQueue.enqueue(db, COL.eetRecords, {
+            receipt,
+            kind,
+            originalKind: originalKind || null,
+            config: SERVER_CONFIG.eet,
+        });
+    }
+
     return receipt;
 }
 
