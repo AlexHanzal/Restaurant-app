@@ -435,6 +435,16 @@ async function applyGatewayPaymentState(record, state) {
     if (newStatus !== "paid" && newStatus !== "failed" && newStatus !== "refunded") return newStatus;
     const paid = newStatus === "paid";
 
+    // GoPay's PARTIALLY_REFUNDED shares the same newStatus ("refunded") as a
+    // full REFUNDED (see the mapping above), but the two must NOT be treated
+    // the same when it comes to how much the storno negates. `state` here is
+    // GoPay's own state string (verified against getPaymentStatus's response
+    // in gopay.js and, for the simulated path, hardcoded to "PAID" so this
+    // is unreachable there) — checked directly rather than re-derived, since
+    // it is the one place in this whole system that actually distinguishes
+    // "some of the money came back" from "all of it did."
+    const isPartialRefund = newStatus === "refunded" && state === "PARTIALLY_REFUNDED";
+
     let receiptCreated = null;
 
     if (record.kind === "delivery" || record.kind === "indoor") {
@@ -484,26 +494,67 @@ async function applyGatewayPaymentState(record, state) {
             // check is what makes double-processing a no-op rather than a
             // second negative trzba: once refundReceiptId is set, re-running
             // this block finds it non-null and does nothing.
+            // Partial refund: do NOT negate original.total — that reports
+            // the FULL sale as reversed when only part of the money came
+            // back, understating trzba by the unrefunded remainder (a
+            // tax-relevant error in the restaurant's favour). See gopay.js
+            // and the isPartialRefund comment above for why the actual
+            // refunded amount cannot be sourced automatically: GoPay's
+            // payment status object carries only the original `amount`
+            // (verified against the official Payment model shipped in
+            // GoPay's own Python/.NET/Go SDKs — none expose a refunded or
+            // remaining-amount field), and this codebase never calls
+            // GoPay's refund endpoint itself, so there is no channel through
+            // which the true refunded amount ever reaches this server. A
+            // fabricated number sent to the tax authority is worse than a
+            // missing one — it is silently believable — so the automated
+            // storno is skipped entirely for this case. A marker receipt
+            // (kind: "refund", refundType: "partial", total: 0 — never
+            // guessed) is still created so the event is visible in the
+            // receipts list for reconciliation, but it is deliberately never
+            // enqueued for EET (skipEetEnqueue) and never sent
+            // (sendEetForReceipt is skipped below for this branch too).
             let refundCreated = null;
             if (newStatus === "refunded" && order.receiptId && !order.refundReceiptId) {
                 const original = db.get(COL.receipts, order.receiptId);
                 if (original) {
-                    refundCreated = createReceiptForOrder({
-                        kind: "refund",
-                        originalKind: record.kind,
-                        // Receipt items carry `unitPrice`; createReceiptForOrder
-                        // reads incoming items by `price`. Negate here — the
-                        // rest of the shape (qty, name, vatRate via the ...it
-                        // spread) carries over unchanged so the VAT breakdown
-                        // mirrors the original sale with every sign flipped.
-                        items: original.items.map(it => ({
-                            ...it, price: -it.unitPrice, qty: it.qty, name: it.name,
-                        })),
-                        total: -original.total,
-                        paymentMethod: original.paymentMethod,
-                        existingReceiptId: null, // always a fresh receipt/porad_cis — never reuse the original's
-                        description: `Storno účtenky ${original.number}`,
-                    });
+                    if (isPartialRefund) {
+                        refundCreated = createReceiptForOrder({
+                            kind: "refund",
+                            originalKind: record.kind,
+                            items: [],
+                            total: 0,
+                            paymentMethod: original.paymentMethod,
+                            existingReceiptId: null,
+                            description: `Částečné storno účtenky ${original.number} — vyžaduje ruční nahlášení EET`,
+                            skipEetEnqueue: true,
+                        });
+                        refundCreated.refundType = "partial";
+                        console.error(
+                            `EET: PARTIAL refund on order ${order.id} (original receipt ${original.number}, ` +
+                            `original total ${original.total} Kč) needs MANUAL EET storno reporting — GoPay does ` +
+                            `not expose the refunded amount, so no automated trzba was generated. Marker receipt: ` +
+                            `${refundCreated.number} (${refundCreated.id}).`
+                        );
+                    } else {
+                        refundCreated = createReceiptForOrder({
+                            kind: "refund",
+                            originalKind: record.kind,
+                            // Receipt items carry `unitPrice`; createReceiptForOrder
+                            // reads incoming items by `price`. Negate here — the
+                            // rest of the shape (qty, name, vatRate via the ...it
+                            // spread) carries over unchanged so the VAT breakdown
+                            // mirrors the original sale with every sign flipped.
+                            items: original.items.map(it => ({
+                                ...it, price: -it.unitPrice, qty: it.qty, name: it.name,
+                            })),
+                            total: -original.total,
+                            paymentMethod: original.paymentMethod,
+                            existingReceiptId: null, // always a fresh receipt/porad_cis — never reuse the original's
+                            description: `Storno účtenky ${original.number}`,
+                        });
+                        refundCreated.refundType = "full";
+                    }
                     refundCreated.refundOf = order.receiptId;
                     db.set(COL.receipts, refundCreated.id, refundCreated);
                     order.refundReceiptId = refundCreated.id;
@@ -522,7 +573,12 @@ async function applyGatewayPaymentState(record, state) {
             // disk.
             db.set(col, order.id, order);
             if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
-            if (refundCreated) await sendEetForReceipt(refundCreated.id);
+            // Partial-refund markers were never enqueued (skipEetEnqueue —
+            // see above) precisely so nothing automated ever reports them;
+            // calling sendEetForReceipt for one would just log a spurious
+            // "no queue record" error for a receipt that was deliberately
+            // never queued.
+            if (refundCreated && !isPartialRefund) await sendEetForReceipt(refundCreated.id);
         }
     } else if (record.kind === "reservation") {
         const { fileId, dateStr, dayIndex, startHour, endHour } = record.target;
@@ -568,27 +624,61 @@ async function applyGatewayPaymentState(record, state) {
             // of "the record this payment is against" — every hour in
             // [startHour, endHour] shares the same receiptId (see the loop
             // below), so primarySlot's is representative of the whole span.
+            // Partial refund: same reasoning as the order path above — do
+            // NOT negate original.total, since GoPay's payment status
+            // object exposes only the original amount (verified against the
+            // official Payment model in GoPay's own SDKs — none carry a
+            // refunded/remaining-amount field) and this app never calls
+            // GoPay's refund endpoint, so the actual refunded amount is
+            // never knowable here. A fabricated storno would be a silently
+            // wrong tax filing, which is worse than none at all, so the
+            // automated storno is skipped for this case; a marker receipt
+            // (refundType: "partial", total: 0 — never guessed) is still
+            // created for the audit trail, but never enqueued for EET
+            // (skipEetEnqueue) and never sent (see the sendEetForReceipt
+            // guard below).
             let refundCreated = null;
             const primarySlot = hoursObj[startHour];
             if (newStatus === "refunded" && primarySlot && primarySlot.receiptId && !primarySlot.refundReceiptId) {
                 const original = db.get(COL.receipts, primarySlot.receiptId);
                 if (original) {
-                    refundCreated = createReceiptForOrder({
-                        kind: "refund",
-                        originalKind: "reservation",
-                        // Receipt items carry `unitPrice`; createReceiptForOrder
-                        // reads incoming items by `price`. Negate here — the
-                        // rest of the shape (qty, name, vatRate via the ...it
-                        // spread) carries over unchanged so the VAT breakdown
-                        // mirrors the original sale with every sign flipped.
-                        items: original.items.map(it => ({
-                            ...it, price: -it.unitPrice, qty: it.qty, name: it.name,
-                        })),
-                        total: -original.total,
-                        paymentMethod: original.paymentMethod,
-                        existingReceiptId: null, // always a fresh receipt/porad_cis — never reuse the original's
-                        description: `Storno účtenky ${original.number}`,
-                    });
+                    if (isPartialRefund) {
+                        refundCreated = createReceiptForOrder({
+                            kind: "refund",
+                            originalKind: "reservation",
+                            items: [],
+                            total: 0,
+                            paymentMethod: original.paymentMethod,
+                            existingReceiptId: null,
+                            description: `Částečné storno účtenky ${original.number} — vyžaduje ruční nahlášení EET`,
+                            skipEetEnqueue: true,
+                        });
+                        refundCreated.refundType = "partial";
+                        console.error(
+                            `EET: PARTIAL refund on reservation ${fileId}/${dateStr}#${dayIndex} (original receipt ` +
+                            `${original.number}, original total ${original.total} Kč) needs MANUAL EET storno ` +
+                            `reporting — GoPay does not expose the refunded amount, so no automated trzba was ` +
+                            `generated. Marker receipt: ${refundCreated.number} (${refundCreated.id}).`
+                        );
+                    } else {
+                        refundCreated = createReceiptForOrder({
+                            kind: "refund",
+                            originalKind: "reservation",
+                            // Receipt items carry `unitPrice`; createReceiptForOrder
+                            // reads incoming items by `price`. Negate here — the
+                            // rest of the shape (qty, name, vatRate via the ...it
+                            // spread) carries over unchanged so the VAT breakdown
+                            // mirrors the original sale with every sign flipped.
+                            items: original.items.map(it => ({
+                                ...it, price: -it.unitPrice, qty: it.qty, name: it.name,
+                            })),
+                            total: -original.total,
+                            paymentMethod: original.paymentMethod,
+                            existingReceiptId: null, // always a fresh receipt/porad_cis — never reuse the original's
+                            description: `Storno účtenky ${original.number}`,
+                        });
+                        refundCreated.refundType = "full";
+                    }
                     refundCreated.refundOf = primarySlot.receiptId;
                     db.set(COL.receipts, refundCreated.id, refundCreated);
                 }
@@ -614,7 +704,10 @@ async function applyGatewayPaymentState(record, state) {
             // corresponding paid/refunded slot on disk.
             db.set(COL.timetables, fileId, data);
             if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
-            if (refundCreated) await sendEetForReceipt(refundCreated.id);
+            // See the order path's identical guard above: a partial-refund
+            // marker was never enqueued, so sending it would just log a
+            // spurious "no queue record" error.
+            if (refundCreated && !isPartialRefund) await sendEetForReceipt(refundCreated.id);
         }
     }
 
@@ -1306,7 +1399,7 @@ function vatFromGross(grossAmount, ratePercent) {
 // already set (idempotent — see comment block above). `items` uses either
 // cart shape ({ name, price, qty, vatRate } or { item, price, qty, vatRate })
 // — same shapes priceOrderItems() already normalizes into every order.
-function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description, gopayInstrument = null, originalKind = null }) {
+function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description, gopayInstrument = null, originalKind = null, skipEetEnqueue = false }) {
     let supersedesReceiptId = null;
     if (existingReceiptId) {
         const existing = db.get(COL.receipts, existingReceiptId);
@@ -1391,7 +1484,18 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
     // reporting problem: it's surfaced loudly here and stays retryable via
     // the receipt's own history (a human/ops process can re-enqueue it).
     // Never let the reporting problem become the money problem.
-    if (eetQueue.isEvidovanaTrzba(paymentMethod, gopayInstrument)) {
+    //
+    // skipEetEnqueue exists for exactly one caller today: a partial-refund
+    // marker receipt (see applyGatewayPaymentState's refund blocks), where
+    // the actual refunded amount is not knowable (GoPay's payment status
+    // object exposes only the original amount, and this app never calls
+    // GoPay's own refund endpoint, so there is no other source for it).
+    // Enqueuing THIS record would hand the retry worker a wrong number to
+    // report with total confidence a few minutes/hours later — the exact
+    // silent-but-wrong outcome this receipt exists to avoid. Skipping
+    // enqueue leaves the receipt itself (the audit trail) intact while
+    // guaranteeing nothing automated ever reports it to the tax authority.
+    if (!skipEetEnqueue && eetQueue.isEvidovanaTrzba(paymentMethod, gopayInstrument)) {
         try {
             eetQueue.enqueue(db, COL.eetRecords, {
                 receipt,
