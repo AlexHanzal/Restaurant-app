@@ -542,15 +542,79 @@ async function applyGatewayPaymentState(record, state) {
                     });
                 }
             }
+
+            // A storno is an evidovaná tržba with a negative amount (same
+            // reasoning as the order-path storno above, verified against the
+            // live playground — see tests/integration/eet-playground.test.js).
+            // Same shape here too: a full receipt of its own, so porad_cis
+            // stays unique with no second numbering scheme, and dat_trzby is
+            // this receipt's own issuedAt, not the original sale's.
+            // originalKind: "reservation" is passed through so
+            // eetQueue.registerFor reports the storno against the SAME
+            // idPokl register the original reservation payment used.
+            //
+            // Guarded by primarySlot.refundReceiptId (not just
+            // newStatus/paid), for the same reason as the order path:
+            // record.status having already flipped to "refunded" is the
+            // FIRST line of defense (see the `newStatus === record.status`
+            // early return above — it already blocks a redelivered/duplicate
+            // GoPay REFUNDED webhook from re-entering this function at all)
+            // but is not the only path that can reach this branch, and this
+            // check is what makes double-processing a no-op rather than a
+            // second negative trzba: once refundReceiptId is set on the
+            // slot, re-running this block finds it non-null and does
+            // nothing. primarySlot (rather than a single order object, which
+            // is what the order path checks) is the reservation's equivalent
+            // of "the record this payment is against" — every hour in
+            // [startHour, endHour] shares the same receiptId (see the loop
+            // below), so primarySlot's is representative of the whole span.
+            let refundCreated = null;
+            const primarySlot = hoursObj[startHour];
+            if (newStatus === "refunded" && primarySlot && primarySlot.receiptId && !primarySlot.refundReceiptId) {
+                const original = db.get(COL.receipts, primarySlot.receiptId);
+                if (original) {
+                    refundCreated = createReceiptForOrder({
+                        kind: "refund",
+                        originalKind: "reservation",
+                        // Receipt items carry `unitPrice`; createReceiptForOrder
+                        // reads incoming items by `price`. Negate here — the
+                        // rest of the shape (qty, name, vatRate via the ...it
+                        // spread) carries over unchanged so the VAT breakdown
+                        // mirrors the original sale with every sign flipped.
+                        items: original.items.map(it => ({
+                            ...it, price: -it.unitPrice, qty: it.qty, name: it.name,
+                        })),
+                        total: -original.total,
+                        paymentMethod: original.paymentMethod,
+                        existingReceiptId: null, // always a fresh receipt/porad_cis — never reuse the original's
+                        description: `Storno účtenky ${original.number}`,
+                    });
+                    refundCreated.refundOf = primarySlot.receiptId;
+                    db.set(COL.receipts, refundCreated.id, refundCreated);
+                }
+            }
+
             for (let h = startHour; h <= endHour; h++) {
                 if (hoursObj[h]) {
                     hoursObj[h].isPaid = paid;
                     hoursObj[h].paymentFailed = newStatus === "failed";
                     if (receiptCreated) hoursObj[h].receiptId = receiptCreated.id;
+                    if (refundCreated) hoursObj[h].refundReceiptId = refundCreated.id;
                 }
             }
+
+            // Persist the slots' new isPaid/paymentFailed (and receiptId/
+            // refundReceiptId, if a receipt was just issued) BEFORE reporting
+            // to EET — same invariant as the order path above: the money-side
+            // fact "this reservation is now paid/refunded" must be durable
+            // before sendEetForReceipt's network round-trip even starts. If
+            // the process dies mid-await, the worst case is a paid/refunded
+            // slot the EET queue hasn't reported yet (the background retry
+            // worker catches up later), never a reported sale with no
+            // corresponding paid/refunded slot on disk.
             db.set(COL.timetables, fileId, data);
             if (receiptCreated) await sendEetForReceipt(receiptCreated.id);
+            if (refundCreated) await sendEetForReceipt(refundCreated.id);
         }
     }
 
