@@ -97,7 +97,37 @@ function enqueue(db, col, { receipt, kind, originalKind, config, supersedesRecei
         // through and create a normal new record below.
     }
 
-    const datTrzby = receipt.issuedAt;
+    // receipt.issuedAt comes straight from createReceiptForOrder's
+    // `new Date().toISOString()` (server.js) — which ALWAYS appends
+    // milliseconds (".xxxZ"). assertEetDateTime (eet.js) requires
+    // \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(Z|[+-]\d\d:\d\d) and deliberately
+    // REJECTS fractional seconds — see its own header comment. Left
+    // unstripped, buildTrzbaBody throws on EVERY real sale's datTrzby the
+    // moment sendOnce tries to send it; sendOnce's try/catch swallows that
+    // throw into lastError and leaves the record "pending" forever (it
+    // never reaches "failed" — the throw happens before there is any
+    // response to classify), while the receipt prints the reassuring
+    // "Tržba je evidována v běžném režimu" notice for a sale that is never
+    // actually reported. Every fixture in this codebase's own test suite
+    // hand-writes a clean, millisecond-free issuedAt, which is exactly why
+    // 102 passing unit tests never caught this — see
+    // tests/unit/eet-queue-issuedat-normalisation.test.js, which drives
+    // this through a REAL `new Date().toISOString()` value specifically to
+    // close that gap. Strip milliseconds here, once, before the timestamp
+    // is frozen into the record.
+    //
+    // A plain regex strip — NOT `new Date(receipt.issuedAt).toISOString()`
+    // — is deliberate: round-tripping through Date/toISOString always
+    // re-renders in UTC "Z" form, which would silently rewrite a
+    // non-UTC-offset issuedAt (e.g. "...+02:00" — legal per the XSD, and
+    // something a caller could hand-construct even though
+    // createReceiptForOrder itself never does) into a different-looking
+    // "Z" timestamp. That's not non-compliant, but it's an unnecessary,
+    // easy-to-miss rewrite of a value this function's whole contract is to
+    // freeze verbatim. A regex strip touches only the fractional-seconds
+    // component and leaves the Z/offset suffix — and everything else about
+    // the string — untouched.
+    const datTrzby = String(receipt.issuedAt).replace(/\.\d+(?=Z|[+\-]\d\d:\d\d$)/, "");
     const record = {
         id: receipt.id,
         receiptId: receipt.id,
@@ -196,7 +226,7 @@ async function sendOnce(db, col, id, { config, credentials, client = eet }) {
             record.pok = res.pok;
             record.sentAt = record.lastAttemptAt;
             record.lastError = null;
-        } else if (eet.classifyError(res.errorCode) === "terminal") {
+        } else if (res.errorCode != null && eet.classifyError(res.errorCode) === "terminal") {
             // Terminal means retrying would fail identically for the full 48h
             // window and hide the fault from staff — stop here instead of
             // burning the deadline on a doomed retry loop.
@@ -204,15 +234,46 @@ async function sendOnce(db, col, id, { config, credentials, client = eet }) {
             record.lastError = `EET ${res.errorCode}: ${res.errorText}`;
             console.error(`❌ EET terminal error on receipt ${record.receiptNumber} — ${record.lastError}`);
         } else {
-            // Retryable EET-level rejection (-1 / 8): stay pending, the
-            // background worker (Task 8) will try again per nextAttemptDelay.
-            record.lastError = `EET ${res.errorCode}: ${res.errorText}`;
+            // Retryable: either an EET-level code the tax authority itself
+            // marked retryable (-1 / 8), OR — just as importantly —
+            // res.errorCode === null, meaning parseResponse() found neither
+            // <Chyba> nor <Potvrzeni> at all (a SOAP fault, a captive-portal
+            // login page, a truncated body from a flaky proxy — anything
+            // that returns HTTP 200 with a body the tax authority never
+            // actually produced). classifyError(null) alone would say
+            // "terminal" (null is neither -1 nor 8), which would
+            // permanently kill the sale on nothing more than an
+            // infrastructure blip that happened to come back as a 200.
+            // Terminal must mean "the tax authority looked at this sale and
+            // rejected it for a reason no retry can fix" — an unparseable
+            // body means no such verdict ever reached us, so stay pending
+            // and let the background worker (Task 8) try again.
+            record.lastError = res.errorCode != null
+                ? `EET ${res.errorCode}: ${res.errorText}`
+                : "EET: response had no parseable <Chyba> or <Potvrzeni> element — treating as a retryable infrastructure failure";
         }
     } catch (e) {
         // Transport-level failure (timeout, DNS, TLS, non-2xx) — eet.js
         // always marks these retryable, and there is nothing else to do here
         // but record the reason and leave the record pending for the worker.
         record.lastError = e.message;
+    }
+
+    // Re-check that this id still exists RIGHT BEFORE persisting. enqueue()'s
+    // supersedesReceiptId path (see its own header comment in this file) can
+    // db.remove() this exact id while the send above was in flight — the
+    // lost-receipt-row fallback in server.js racing this very call. `record`
+    // here was fetched via db.get() before that removal, so without this
+    // check the write below would resurrect a row enqueue() just deleted —
+    // and it would come back holding the SAME uuidZpravy as the new row
+    // enqueue() created for the replacement receipt. Two rows, one
+    // uuidZpravy: the new one legitimately tracked, this one orphaned and
+    // retried forever by the background worker with nothing ever pointing
+    // at it. Whatever id superseded this one now owns the sale's future —
+    // just discard this attempt's outcome instead of writing it anywhere.
+    if (!db.get(col, id)) {
+        console.error(`EET: queue record ${id} was removed (likely superseded by a replacement receipt) while a send was in flight — discarding this attempt's result instead of resurrecting it`);
+        return null;
     }
 
     // The persist itself has to be inside the protected region too: this
@@ -290,6 +351,21 @@ function healthSummary(db, col, now = new Date()) {
     // don't have to open individual records to see why things are stuck.
     const lastFailed = all.filter(r => r.lastError).slice(-1)[0];
 
+    // Warnings (Varovani) come back on an otherwise-successful POK — see
+    // sendOnce, which stores res.warnings on the record unconditionally,
+    // success or not. They are not fatal to the sale, which is exactly why
+    // nothing in this codebase surfaces them anywhere: they land on the
+    // record and just sit there. That's the wrong default for something the
+    // tax authority is actively trying to tell the operator (e.g. "kod_varov
+    // 6" — id_jednotky/id_pokl format issues that don't block filing today
+    // but may in a future crackdown). Counting them here, alongside the most
+    // recent one's text, is the minimum needed to make /api/eet/health (the
+    // only consumer of this function) stop hiding them entirely.
+    const recordsWithWarnings = all.filter(r => Array.isArray(r.warnings) && r.warnings.length > 0);
+    const warningCount = recordsWithWarnings.reduce((sum, r) => sum + r.warnings.length, 0);
+    const lastWarningRecord = recordsWithWarnings.slice(-1)[0];
+    const lastWarning = lastWarningRecord ? lastWarningRecord.warnings[lastWarningRecord.warnings.length - 1] : null;
+
     return {
         pending: pending.length,
         confirmed: all.filter(r => r.state === "confirmed").length,
@@ -297,6 +373,8 @@ function healthSummary(db, col, now = new Date()) {
         overdue: pending.filter(r => new Date(r.deadlineAt) < now).length,
         oldestPending: oldest ? oldest.id : null,
         lastError: lastFailed ? lastFailed.lastError : null,
+        warningCount,
+        lastWarning,
     };
 }
 

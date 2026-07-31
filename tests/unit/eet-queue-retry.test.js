@@ -107,6 +107,30 @@ test("oldestPending ignores a record with a missing datTrzby", () => {
     assert.strictEqual(queue.healthSummary(db, "eet", NOW).oldestPending, "genuine");
 });
 
+// ----------------------------------------------------------------------------
+// Tax-authority warnings (Varovani) are stored on records by sendOnce but,
+// before this fix, never surfaced anywhere — /api/eet/health hid them
+// entirely. warningCount/lastWarning close that gap.
+// ----------------------------------------------------------------------------
+
+test("healthSummary surfaces a warning count and the most recent warning", () => {
+    const db = fakeDb([
+        rec({ id: "a", state: "confirmed", warnings: [{ code: 6, text: "id_jednotky format issue" }] }),
+        rec({ id: "b", state: "confirmed", warnings: [] }),
+        rec({ id: "c", state: "confirmed", warnings: [{ code: 2, text: "newer warning" }] }),
+    ]);
+    const h = queue.healthSummary(db, "eet", NOW);
+    assert.strictEqual(h.warningCount, 2);
+    assert.deepStrictEqual(h.lastWarning, { code: 2, text: "newer warning" });
+});
+
+test("healthSummary reports no warnings when none are recorded", () => {
+    const db = fakeDb([rec({ id: "a", state: "confirmed", warnings: [] })]);
+    const h = queue.healthSummary(db, "eet", NOW);
+    assert.strictEqual(h.warningCount, 0);
+    assert.strictEqual(h.lastWarning, null);
+});
+
 test("oldestPending ignores a record with an unparseable datTrzby", () => {
     const db = fakeDb([
         rec({ id: "corrupt", state: "pending", datTrzby: "not-a-date" }),

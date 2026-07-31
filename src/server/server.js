@@ -426,7 +426,28 @@ async function applyGatewayPaymentState(record, state) {
     else if (state === "REFUNDED" || state === "PARTIALLY_REFUNDED") newStatus = "refunded";
     else newStatus = "pending"; // CREATED / PAYMENT_METHOD_CHOSEN — still in progress
 
-    if (newStatus === record.status) return newStatus; // no change, nothing to propagate
+    if (newStatus === record.status) {
+        // A second refund-shaped webhook (e.g. a genuinely separate,
+        // additional partial refund processed after the first one) maps to
+        // the SAME newStatus ("refunded") the record already has, so it
+        // dies right here — it never re-enters either refund block below
+        // (order-shaped or reservation-shaped), which means no marker
+        // receipt, no console.error from those blocks, nothing. That's the
+        // correct outcome for GoPay redelivering the identical event (real
+        // idempotency), but from here the two cases are indistinguishable,
+        // and a genuinely second refund vanishing with zero trace is silent
+        // money movement. Log it so at least someone notices — this is the
+        // only place in the function that sees BOTH the order-shaped and
+        // reservation-shaped paths before they diverge.
+        if (newStatus === "refunded") {
+            console.error(
+                `EET: ignored a refund-shaped webhook for payment ${record.id} (kind=${record.kind}, gateway state=${state}) `
+                + `— this record was already "refunded". If this is a genuinely separate additional refund (not a `
+                + `redelivery of the same GoPay event), it produced NO marker receipt and NO EET record.`
+            );
+        }
+        return newStatus; // no change, nothing to propagate
+    }
 
     record.status = newStatus;
     record.updatedAt = new Date().toISOString();
@@ -1662,7 +1683,11 @@ function renderReceiptHtml(receipt) {
 
     // EET 2.0: mirrors the `receipt.eet` block sendEetForReceipt() attaches
     // after a (best-effort or retried) send. No block at all means the sale
-    // wasn't reportable (e.g. cash-exempt or EET disabled) — nothing to show.
+    // wasn't reportable (e.g. EET disabled entirely, or skipEetEnqueue for a
+    // partial-refund marker receipt — see createReceiptForOrder) — nothing
+    // to show. NOT cash: isEvidovanaTrzba() (eet-queue.js) reports every
+    // payment method, cash included, per the owner's 2026-07-31 decision —
+    // there is no EET-exempt payment method in this codebase.
     // A block without a POK means no confirmation has been received yet —
     // but "not confirmed" is NOT one single case. It splits on
     // receipt.eet.state (set verbatim from the eet_records row by
@@ -1728,7 +1753,11 @@ function renderReceiptHtml(receipt) {
     /* Failed EET state must read as visibly distinct from the merely-pending
        one (see RECEIPT_EET_FAILED_NOTICE) — same red used elsewhere on this
        page for the playground warning, reused here rather than inventing a
-       second alarm color. No inline style="..." — CSP forbids it here. */
+       second alarm color. Expressed as a CSS class, not inline style="...",
+       for plain readability/reuse — NOT because CSP forbids it: style-src
+       includes 'unsafe-inline' (see configureCsp() below), and this same
+       file uses inline style="..." elsewhere in this very function (the
+       "Způsob platby" row) and in renderReceiptNotFoundHtml()'s <body>. */
     .eet-failed { border-color: #b00020; background: #fdecea; color: #7a0016; font-weight: 600; }
     .footer { margin-top: 28px; text-align: center; color: #888; font-size: 12px; }
     @media print {
@@ -4609,6 +4638,25 @@ const EET_MAX_RECORDS_PER_TICK = 25;
 // overlap at all reopens the same-record race above.
 let eetRetryWorkerInFlight = false;
 
+// Rate-limits the near-deadline escalation console.error below to at most
+// once per record per hour. Without this, a record that's been past-deadline
+// for days (dueRecords() deliberately never stops surfacing those — see its
+// own comment in eet-queue.js) logs that same escalation line on every tick
+// it happens to be due, forever — for the default 60s retryIntervalMs, once
+// the record settles into the tail backoff stage that's roughly hourly
+// anyway, but that cadence is an accident of BACKOFF_TAIL_MS rather than
+// anything this function actually guarantees, and a shorter
+// EET_RETRY_INTERVAL_MS or a future backoff tweak would silently turn it
+// into log spam. An explicit per-record timestamp makes the "at most once an
+// hour" promise hold regardless of either of those. In-memory only — losing
+// it on a restart just means one extra escalation line gets logged, not a
+// correctness problem — and it isn't cleaned up when a record leaves the
+// due set (moves to confirmed/failed) because the entries are one small
+// timestamp each and bounded by how many receipts have EVER gone
+// near-deadline, which in healthy operation is zero.
+const eetEscalationLastLoggedAt = new Map();
+const ESCALATION_LOG_INTERVAL_MS = 60 * 60 * 1000;
+
 async function eetRetryWorkerTick() {
     if (eetRetryWorkerInFlight) {
         // Logged (not silent) so a permanently-overrunning scan — e.g. the
@@ -4642,10 +4690,14 @@ async function eetRetryWorkerTick() {
 
         for (const record of due) {
             if (new Date(record.deadlineAt) - now < ESCALATE_BEFORE_DEADLINE_MS) {
-                console.error(
-                    `⚠️  EET: receipt ${record.receiptNumber} still unreported, `
-                    + `deadline ${record.deadlineAt} (${record.attempts} attempts, last: ${record.lastError})`
-                );
+                const lastLogged = eetEscalationLastLoggedAt.get(record.id);
+                if (!lastLogged || now.getTime() - lastLogged >= ESCALATION_LOG_INTERVAL_MS) {
+                    console.error(
+                        `⚠️  EET: receipt ${record.receiptNumber} still unreported, `
+                        + `deadline ${record.deadlineAt} (${record.attempts} attempts, last: ${record.lastError})`
+                    );
+                    eetEscalationLastLoggedAt.set(record.id, now.getTime());
+                }
             }
             // sendEetForReceipt already wraps sendOnce (which itself never
             // throws — see eet-queue.js) in its own try/catch, so one bad
