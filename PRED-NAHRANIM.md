@@ -154,6 +154,18 @@ nebo (horší) to bude hlásit tržby špatně.
       `{ enabled, mode, pending, confirmed, failed, overdue, oldestPending,
       lastError }`). Alert při **`overdue > 0`** — to znamená, že aspoň jedna
       tržba propásla zákonnou 48hodinovou lhůtu k nahlášení.
+- [ ] **Účetní odsouhlasila hlášení bankovních převodů jako evidované
+      tržby.** Funkce `isEvidovanaTrzba` (`src/server/eet-queue.js`, řádky
+      32–34) aktuálně vrací `true` pro úplně každou potvrzenou platbu bez
+      rozlišení způsobu platby — tedy i pro platby převodem na účet přes
+      GoPay (`BANK_ACCOUNT`, jedna ze čtyř možností nabízených v
+      `DEFAULT_PAYMENT_INSTRUMENTS`, `src/server/gopay.js`, vedle platby
+      kartou, Google Pay a Apple Pay). Je to vědomé rozhodnutí majitele z
+      2026-07-31, ne opomenutí v kódu — ale jde o daňovou otázku, kterou
+      musí posoudit účetní, ne o něco, co plyne z techniky: **je platba
+      bankovním převodem přes GoPay skutečně evidovaná tržba, nebo by měla
+      být z hlášení vyloučena?** Pokud má být vyloučena, jde o jednořádkovou
+      úpravu přímo v `isEvidovanaTrzba`.
 - [ ] **Sledování částečných refundů.** GoPay neposkytuje skutečně vrácenou
       částku u částečné refundace, takže se u ní **automatický storno
       nevygeneruje** — vznikne jen nulová „marker" účtenka a do logu jde

@@ -132,6 +132,28 @@ refunded amount is known. A *full* refund (the whole original sale reversed)
 does not have this problem — GoPay confirms the full original amount, so that
 case is reported automatically as a negative trzba.
 
+### Every instrument is reported, including bank transfers — by design
+
+`isEvidovanaTrzba(paymentMethod, gopayInstrument)` in `src/server/eet-queue.js`
+(currently `return true;` unconditionally, lines 32–34) decides whether a
+confirmed payment gets an EET record enqueued at all. GoPay's checkout offers
+four instruments (`DEFAULT_PAYMENT_INSTRUMENTS` in `src/server/gopay.js`):
+`PAYMENT_CARD`, `GPAY`, `APPLE_PAY`, and `BANK_ACCOUNT` (bank transfer). Right
+now every one of them — plus every other `paymentMethod` this app has — is
+reported to Finanční správa as an evidovaná tržba, with no branching on
+instrument at all.
+
+This is the owner's explicit decision, made 2026-07-31, not an oversight:
+whether a GoPay `BANK_ACCOUNT` bank transfer legally counts as an evidovaná
+tržba is a tax question the code cannot answer on its own, so it currently
+reports it rather than guessing it doesn't. If the restaurant's accountant
+later determines bank transfers (or any other instrument) should be
+excluded, narrowing the reporting is a one-line change in one place: replace
+`return true;` in `isEvidovanaTrzba` (`src/server/eet-queue.js`, lines 32–34)
+with logic that inspects `paymentMethod`/`gopayInstrument`.
+`tests/unit/eet-queue.test.js` already calls the function with both
+arguments, so a narrowed implementation has a test in place to update.
+
 ## Design docs
 
 Specs and implementation plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/` — start with `2026-07-19-go-live-operations-design.md`.
