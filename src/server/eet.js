@@ -30,6 +30,9 @@
 // dat_trzby + celk_trzba. Do not port 1.0 receipt-code logic into here.
 // ============================================================================
 
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+
 const EET_NS = "http://fs.gov.cz/eet/schema/v4";
 const SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/";
 const WSSE_NS = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd";
@@ -122,9 +125,6 @@ function buildTrzbaBody(sale) {
         + `</soapenv:Body>`;
 }
 
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-
 // WHY SignedInfo declares xmlns:ds itself: when the server verifies, it
 // canonicalises the SignedInfo SUBTREE. In subtree canonicalisation
 // SignedInfo is the apex, so exc-c14n always renders the ds declaration on it
@@ -153,16 +153,48 @@ function signedInfoFor(bodyXml) {
 //   openssl pkcs12 -in pokladni.p12 -nocerts -nodes -out secrets/eet-key.pem
 function loadCredentials({ certPem, keyPem, keyPassphrase }) {
     const certText = fs.readFileSync(certPem, "utf8");
-    const match = certText.match(/-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/);
-    if (!match) throw new Error(`EET: no PEM certificate found in ${certPem}`);
 
-    const privateKey = crypto.createPrivateKey({
-        key: fs.readFileSync(keyPem, "utf8"),
-        ...(keyPassphrase ? { passphrase: keyPassphrase } : {}),
-    });
+    // MOJE daně issues a single leaf certificate, but a PEM assembled by hand
+    // (or exported from some other tool) can hold a whole chain. We only ever
+    // want the leaf — by convention the FIRST block — and using anything else
+    // produces a BinarySecurityToken the server can't validate, which again
+    // surfaces only as the opaque error code 4. Rather than silently trusting
+    // "first block found" when there might be several, count them and warn:
+    // a misordered chain is now diagnosable from the log instead of invisible.
+    const certBlocks = certText.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g);
+    if (!certBlocks || certBlocks.length === 0) throw new Error(`EET: no PEM certificate found in ${certPem}`);
+    if (certBlocks.length > 1) {
+        console.warn(
+            `EET: ${certPem} contains ${certBlocks.length} CERTIFICATE blocks; using the first as the leaf. `
+            + `If this is a chain and the leaf is not listed first, the wrong certificate will be embedded.`
+        );
+    }
+    const [, certBody] = certBlocks[0].match(/-----BEGIN CERTIFICATE-----([\s\S]+?)-----END CERTIFICATE-----/);
+
+    let privateKey;
+    try {
+        privateKey = crypto.createPrivateKey({
+            key: fs.readFileSync(keyPem, "utf8"),
+            ...(keyPassphrase ? { passphrase: keyPassphrase } : {}),
+        });
+    } catch (err) {
+        // An encrypted key with no (or the wrong) passphrase fails inside OpenSSL
+        // with a message like "error:1C800064:Provider routines::bad decrypt" or
+        // "error:07880109:...::interrupted or cancelled" — neither names the key
+        // file nor says what's actually wrong. Since this is deploy-time
+        // configuration (a wrong keyPassphrase env var), name the file and state
+        // the fix so it isn't re-diagnosed from an OpenSSL string every time.
+        if (!keyPassphrase && /bad decrypt|interrupted or cancelled|bad password/i.test(err.message)) {
+            throw new Error(
+                `EET: ${keyPem} is an encrypted private key but no passphrase was supplied `
+                + `(pass keyPassphrase to loadCredentials). Original error: ${err.message}`
+            );
+        }
+        throw err;
+    }
 
     // BinarySecurityToken carries the DER bytes base64'd on a single line.
-    return { certDer: match[1].replace(/\s+/g, ""), privateKey };
+    return { certDer: certBody.replace(/\s+/g, ""), privateKey };
 }
 
 function buildSignedEnvelope(bodyXml, creds) {
