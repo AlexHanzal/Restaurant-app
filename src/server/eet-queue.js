@@ -217,7 +217,62 @@ async function sendOnce(db, col, id, { config, credentials, client = eet }) {
     }
 }
 
+// Records eligible for another attempt right now (Task 8's retry worker in
+// server.js calls this on a timer and awaits sendOnce for each result). Only
+// `pending` records are candidates at all — sendOnce() already treats
+// `confirmed`/`failed` as terminal no-ops (see its own comments), so a record
+// in either state would just come back unchanged; filtering here purely
+// saves the wasted call.
+//
+// Deliberately does NOT filter out records past their deadlineAt. It is
+// tempting to read DEADLINE_MS/deadlineAt and conclude "no point retrying
+// after 48h, ZoET has already been violated" — but that reasoning is
+// backwards. Blowing the 48h window is a compliance problem to be surfaced
+// and fixed (loudly — see the ESCALATE_BEFORE_DEADLINE_MS logging in
+// server.js's worker), not a signal to give up and let the sale sit
+// unreported forever. Do not "optimise" this filter back in.
+function dueRecords(db, col, now = new Date()) {
+    return db.list(col).filter(r => {
+        if (r.state !== "pending") return false;
+        if (!r.lastAttemptAt) return true;
+        const waited = now.getTime() - new Date(r.lastAttemptAt).getTime();
+        return waited >= nextAttemptDelay(r.attempts);
+    });
+}
+
+// Feeds the staff-only GET /api/eet/health route in server.js. Revenue-shaped
+// (counts by state, the oldest unreported sale, the most recent failure
+// reason) — nothing here is sensitive on its own, but combined it tells a
+// competitor or a curious customer roughly how much unreported/failed
+// business is flowing through, hence requireAuth at the route rather than
+// leaving this endpoint open.
+function healthSummary(db, col, now = new Date()) {
+    const all = db.list(col);
+    const pending = all.filter(r => r.state === "pending");
+    // Oldest by the sale's own timestamp (datTrzby), not by when we happened
+    // to look at it — that's what tells staff how long a sale has actually
+    // been unreported, which is the number that matters for the 48h clock.
+    const oldest = pending
+        .slice()
+        .sort((a, b) => new Date(a.datTrzby || 0) - new Date(b.datTrzby || 0))[0];
+    // Last-seen error in list order, not last-seen chronologically — db.list
+    // has no ordering guarantee, but for the health snapshot "some recent
+    // failure reason" is enough; it exists so staff glancing at /eet/health
+    // don't have to open individual records to see why things are stuck.
+    const lastFailed = all.filter(r => r.lastError).slice(-1)[0];
+
+    return {
+        pending: pending.length,
+        confirmed: all.filter(r => r.state === "confirmed").length,
+        failed: all.filter(r => r.state === "failed").length,
+        overdue: pending.filter(r => new Date(r.deadlineAt) < now).length,
+        oldestPending: oldest ? oldest.id : null,
+        lastError: lastFailed ? lastFailed.lastError : null,
+    };
+}
+
 module.exports = {
     DEADLINE_MS, BACKOFF_MS, BACKOFF_TAIL_MS,
     isEvidovanaTrzba, registerFor, nextAttemptDelay, enqueue, sendOnce,
+    dueRecords, healthSummary,
 };

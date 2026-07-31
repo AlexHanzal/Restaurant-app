@@ -3965,6 +3965,22 @@ function setupAPIRoutes() {
         res.send(renderReceiptHtml(receipt));
     });
 
+    // ── EET (elektronická evidence tržeb) ────────────────────────────────
+    // Everything about actually reporting a sale lives in eet.js/eet-queue.js
+    // — this is the one read-only status route on top of that queue.
+
+    // GET — EET queue health for the staff dashboard. requireAuth, not
+    // public: pending/confirmed/failed counts plus the oldest unreported
+    // sale are revenue-shaped information (same reasoning as GET
+    // /stats/sales above), not something to hand an anonymous caller.
+    app.get(`${api}/eet/health`, requireAuth, (req, res) => {
+        res.json({
+            enabled: SERVER_CONFIG.eet.enabled,
+            mode: SERVER_CONFIG.eet.playground ? "playground" : "production",
+            ...eetQueue.healthSummary(db, COL.eetRecords),
+        });
+    });
+
     // ── DATA EXPORT (backup) ─────────────────────────────────────────────
     // Storage is now a single SQLite file, so "export" just means "download
     // that file". We checkpoint the WAL into the main .db file first so the
@@ -4211,6 +4227,62 @@ function reminderScannerTick() {
 }
 
 // ============================================================================
+// EET RETRY WORKER (go-live Task 8) — the safety net behind sendEetForReceipt.
+// ZoET gives a sale 48h to get through after a failed first attempt; this is
+// what makes that deadline real rather than aspirational. It runs on a plain
+// interval regardless of how the immediate send at payment time went —
+// success, failure, or EET disabled at the time — because eetQueue.enqueue()
+// already wrote the durable queue record before any network call happened
+// (see the header comment at the top of eet-queue.js: the queue is the
+// source of truth, the immediate send is only an optimisation).
+//
+// Same shape as reminderScannerTick()/its interval above: a bare setInterval,
+// unref()'d so it never blocks a graceful shutdown, entirely gated by a
+// config flag (SERVER_CONFIG.eet.enabled here, notifications.
+// smsReservationReminder there).
+//
+// ESCALATE_BEFORE_DEADLINE_MS controls only a console.error a few hours
+// before a record's 48h window closes — it does NOT change what gets
+// retried. dueRecords() (eet-queue.js) deliberately keeps retrying records
+// that are already past deadlineAt; this is purely "make a compliance
+// problem loud in the logs before it happens", not a cutoff.
+const ESCALATE_BEFORE_DEADLINE_MS = 6 * 60 * 60 * 1000;
+
+async function eetRetryWorkerTick() {
+    try {
+        // No credentials (EET disabled, or the cert failed to load and is
+        // still inside its 60s retry cooldown — see eetCredentials() above)
+        // means every sendOnce call this tick would just re-log the same
+        // "queued but not transmitted" line. Skip the whole tick; the queue
+        // records are untouched and the next tick tries again.
+        const creds = eetCredentials();
+        if (!creds) return;
+
+        const now = new Date();
+        for (const record of eetQueue.dueRecords(db, COL.eetRecords, now)) {
+            if (new Date(record.deadlineAt) - now < ESCALATE_BEFORE_DEADLINE_MS) {
+                console.error(
+                    `⚠️  EET: receipt ${record.receiptNumber} still unreported, `
+                    + `deadline ${record.deadlineAt} (${record.attempts} attempts, last: ${record.lastError})`
+                );
+            }
+            // sendEetForReceipt already wraps sendOnce (which itself never
+            // throws — see eet-queue.js) in its own try/catch, so one bad
+            // record here can't stop the loop from reaching the rest of the
+            // due records this tick.
+            await sendEetForReceipt(record.id);
+        }
+    } catch (e) {
+        // Same belt-and-braces as reminderScannerTick(): nothing inside this
+        // function is expected to throw, but a setInterval callback that
+        // throws would still just silently stop firing forever afterward —
+        // unacceptable for the one thing standing between an outage and a
+        // dropped legally-reportable sale.
+        console.error("EET retry worker tick failed:", e);
+    }
+}
+
+// ============================================================================
 // START
 // ============================================================================
 
@@ -4267,6 +4339,17 @@ async function start() {
     // or stops future ticks.
     const reminderIntervalMs = Number(process.env.RESERVATION_REMINDER_INTERVAL_MS) || 5 * 60 * 1000;
     setInterval(reminderScannerTick, reminderIntervalMs).unref();
+
+    // go-live Task 8: EET retry worker — only starts when EET itself is
+    // enabled (SERVER_CONFIG.eet.enabled, gated the same way the boot-time
+    // eetCredentials() warning above is). unref()'d for the same reason as
+    // the reminder interval directly above: this alone must never keep the
+    // process alive or block a graceful shutdown. See eetRetryWorkerTick()
+    // for why this has to run unconditionally once EET is enabled, not just
+    // after a failed immediate send.
+    if (SERVER_CONFIG.eet.enabled) {
+        setInterval(eetRetryWorkerTick, SERVER_CONFIG.eet.retryIntervalMs).unref();
+    }
 
     // Performance optimization design (2026-07-23) §4: SSE heartbeat for
     // GET ${API_PREFIX}/events/board — a bare `: ping` comment line every
