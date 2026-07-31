@@ -1154,12 +1154,18 @@ function vatFromGross(grossAmount, ratePercent) {
 // cart shape ({ name, price, qty, vatRate } or { item, price, qty, vatRate })
 // — same shapes priceOrderItems() already normalizes into every order.
 function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description, gopayInstrument = null, originalKind = null }) {
+    let supersedesReceiptId = null;
     if (existingReceiptId) {
         const existing = db.get(COL.receipts, existingReceiptId);
         if (existing) return existing;
         // existingReceiptId pointed at a receipt that's gone missing (should
         // not normally happen) — fall through and mint a fresh one rather
-        // than silently losing the receipt for a paid order.
+        // than silently losing the receipt for a paid order. Remember the
+        // stale id: the eet_records row for this SALE (if one was already
+        // enqueued) lives under it, and eetQueue.enqueue() below needs it to
+        // avoid opening a second, duplicate-reporting record for the same
+        // sale (see supersedesReceiptId doc in eet-queue.js).
+        supersedesReceiptId = existingReceiptId;
     }
 
     const receiptItems = (items || []).map(raw => {
@@ -1220,13 +1226,30 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
     // function stays sync on purpose — it has five call sites and runs inside
     // applyGatewayPaymentState, so making it async would ripple everywhere.
     // Sending is a separate awaited step; see sendEetForReceipt().
+    //
+    // Wrapped in try/catch on purpose: by this point the receipt row is
+    // ALREADY persisted (db.set above) — a paying customer's money has
+    // already changed hands. If enqueue() threw past this point uncaught,
+    // createReceiptForOrder would throw too, and every caller (the GoPay
+    // webhook, the mark-paid routes) would never reach its own
+    // order.paymentStatus/order.receiptId write. That leaves a charged
+    // customer with an orphaned receipt and an order still showing unpaid —
+    // a money bug. Failing to queue the EET record is, by contrast, a
+    // reporting problem: it's surfaced loudly here and stays retryable via
+    // the receipt's own history (a human/ops process can re-enqueue it).
+    // Never let the reporting problem become the money problem.
     if (eetQueue.isEvidovanaTrzba(paymentMethod, gopayInstrument)) {
-        eetQueue.enqueue(db, COL.eetRecords, {
-            receipt,
-            kind,
-            originalKind: originalKind || null,
-            config: SERVER_CONFIG.eet,
-        });
+        try {
+            eetQueue.enqueue(db, COL.eetRecords, {
+                receipt,
+                kind,
+                originalKind: originalKind || null,
+                config: SERVER_CONFIG.eet,
+                supersedesReceiptId,
+            });
+        } catch (e) {
+            console.error(`EET enqueue failed for receipt ${receipt.number} (${receipt.id}):`, e);
+        }
     }
 
     return receipt;

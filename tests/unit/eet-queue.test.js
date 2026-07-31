@@ -9,6 +9,7 @@ function fakeDb() {
         get: (c, id) => store.get(`${c}:${id}`) || null,
         set: (c, id, v) => { store.set(`${c}:${id}`, v); return v; },
         list: c => [...store.entries()].filter(([k]) => k.startsWith(`${c}:`)).map(([, v]) => v),
+        remove: (c, id) => { store.delete(`${c}:${id}`); },
     };
 }
 
@@ -67,4 +68,64 @@ test("register is chosen per channel", () => {
 
 test("a refund uses the register of the channel it refunds", () => {
     assert.strictEqual(queue.registerFor(CONFIG, "refund", "delivery"), "DELIVERY");
+});
+
+// --- supersedesReceiptId: a lost receipt row must not duplicate a sale -----
+//
+// createReceiptForOrder() has a fallback: if existingReceiptId points at a
+// receipt row that's gone missing, it mints a brand new receipt (new id,
+// new issuedAt) rather than losing the receipt entirely. But the SALE this
+// receipt represents already has an eet_records row under the OLD receipt
+// id, with its own uuidZpravy/datTrzby/poradCis already assigned (possibly
+// already sent to the tax authority). Minting an independent eet_records
+// row for the new receipt would report that one sale twice. enqueue()'s
+// supersedesReceiptId option is how the fallback tells the queue "this new
+// receipt stands in for that old, lost one — don't open a second case file."
+
+test("enqueue with supersedesReceiptId preserves the sale's frozen EET identity when a prior record exists", () => {
+    const db = fakeDb();
+    const lostReceipt = { id: "rcpt-lost", number: "2026-000005", issuedAt: "2026-07-31T09:00:00+02:00", total: 500 };
+    const prior = queue.enqueue(db, "eet_records", { receipt: lostReceipt, kind: "indoor", config: CONFIG });
+
+    const replacementReceipt = { id: "rcpt-new", number: "2026-000042", issuedAt: "2026-07-31T12:00:00+02:00", total: 500 };
+    const rec = queue.enqueue(db, "eet_records", {
+        receipt: replacementReceipt,
+        kind: "indoor",
+        config: CONFIG,
+        supersedesReceiptId: "rcpt-lost",
+    });
+
+    // Frozen identity: exactly what was first assigned to the SALE, never
+    // re-derived from the replacement receipt.
+    assert.strictEqual(rec.uuidZpravy, prior.uuidZpravy, "uuidZpravy must not be regenerated");
+    assert.strictEqual(rec.datTrzby, prior.datTrzby, "datTrzby must not be regenerated");
+    assert.strictEqual(rec.poradCis, prior.poradCis, "poradCis must not be regenerated");
+    assert.strictEqual(rec.poradCis, "2026-000005", "poradCis must stay the number the sale was reported under, not the new receipt's number");
+    assert.strictEqual(rec.celkTrzba, prior.celkTrzba);
+    assert.strictEqual(rec.state, prior.state);
+
+    // Pointers move to the new receipt — that's just where to find the
+    // printable copy, not part of the sale's tax identity.
+    assert.strictEqual(rec.receiptId, "rcpt-new");
+    assert.strictEqual(rec.receiptNumber, "2026-000042");
+
+    // No second row: the sale gets exactly ONE eet_records row, ever.
+    assert.strictEqual(db.list("eet_records").length, 1);
+});
+
+test("enqueue with supersedesReceiptId creates a normal new record when no prior record exists", () => {
+    const db = fakeDb();
+    const rec = queue.enqueue(db, "eet_records", {
+        receipt: RECEIPT,
+        kind: "indoor",
+        config: CONFIG,
+        supersedesReceiptId: "rcpt-never-existed",
+    });
+
+    assert.strictEqual(rec.id, "rcpt1");
+    assert.strictEqual(rec.receiptId, "rcpt1");
+    assert.strictEqual(rec.receiptNumber, "2026-000001");
+    assert.strictEqual(rec.poradCis, "2026-000001");
+    assert.strictEqual(rec.state, "pending");
+    assert.strictEqual(db.list("eet_records").length, 1);
 });

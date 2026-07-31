@@ -47,9 +47,39 @@ function nextAttemptDelay(attempts) {
 // Creates the pending record. Idempotent on receipt.id: calling twice returns
 // the first record untouched, which matters because uuidZpravy and datTrzby
 // must never change once assigned (see sendOnce).
-function enqueue(db, col, { receipt, kind, originalKind, config }) {
+//
+// supersedesReceiptId exists for exactly one caller: createReceiptForOrder's
+// fallback in server.js, which mints a brand-new receipt (new id, new
+// issuedAt) when the receipt row `existingReceiptId` pointed at has gone
+// missing. That new receipt is a new ROW, but it is NOT a new SALE — the
+// eet_records entry tracks the sale, not the receipt row, and a sale must be
+// reported exactly once. If we let the normal path run for the replacement
+// receipt, it would mint an independent record with its own uuidZpravy and
+// datTrzby, and the tax authority's uniqueness key is
+// (eic_popl, id_jednotky, id_pokl, dat_trzby) — so the SAME sale would be
+// reported a second time. Silent double-reported revenue. So: when a prior
+// record exists under supersedesReceiptId, we keep it (frozen uuidZpravy,
+// datTrzby, poradCis, celkTrzba, state — including poradCis, which must stay
+// the sequence number the sale was/will be reported under, not the
+// replacement receipt's number) and only repoint receiptId/receiptNumber at
+// the new receipt, so future lookups (printing, sendOnce) find it by the new
+// receipt's id. Do not "simplify" this into always re-deriving from
+// `receipt` — that's the exact bug this branch exists to prevent.
+function enqueue(db, col, { receipt, kind, originalKind, config, supersedesReceiptId }) {
     const existing = db.get(col, receipt.id);
     if (existing) return existing;
+
+    if (supersedesReceiptId) {
+        const prior = db.get(col, supersedesReceiptId);
+        if (prior) {
+            const carried = { ...prior, id: receipt.id, receiptId: receipt.id, receiptNumber: receipt.number };
+            db.remove(col, supersedesReceiptId);
+            return db.set(col, receipt.id, carried);
+        }
+        // No prior record under the stale id — nothing to carry forward
+        // (e.g. the sale was never enqueued in the first place). Fall
+        // through and create a normal new record below.
+    }
 
     const datTrzby = receipt.issuedAt;
     const record = {
