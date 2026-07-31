@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rezervace stolu</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/reservation/css/design.css">
+    <link rel="stylesheet" href="/reservation/css/reservation.css">
+    <!-- Floorplan table picking (docs/superpowers/specs/2026-07-27-floorplan-
+         table-picking-design.md §5.1/§6.1) — shared module, also loaded by
+         inner.html for the admin surfaces. -->
+    <link rel="stylesheet" href="/reservation/css/floorplan.css">
+</head>
+<body>
+  <header class="ds-page-header">
+    <span class="ds-wordmark">Restaurace</span>
+    <span class="ds-page-header__section">Rezervace</span>
+  </header>
+
+  <main class="rsv-page">
+    <div class="rsv-hero">
+      <h1 class="ds-poster">Rezervace stolu<span class="ds-poster__stop">.</span></h1>
+      <p class="rsv-hero__lede">Vyberte počet osob, den a čas — ukážeme vám, které stoly jsou v tu chvíli volné.</p>
+    </div>
+
+    <!-- Shown instead of the sections below when settings.reservations.paused
+         is true (fetched from GET /settings by renderer.js) — server is the
+         actual authority (see /reservations/send-code and /verify-and-book),
+         this is just the friendly front-of-house reflection of that state. -->
+    <section class="rsv-section" id="rsvPausedSection">
+      <p class="ds-empty">Rezervace jsou dočasně pozastaveny. Zkuste to prosím později.</p>
+    </section>
+
+    <!-- Party size: 1-8, defaults to 2 (floorplan-table-picking design §6.1).
+         Independent of date/time, so it sits above the day strip — picking it
+         only changes which tables render "too-small" further down. Reuses
+         the time grid's 4-column chip layout (.rsv-time-grid), not its
+         semantics, since this page's CSS is owned elsewhere. -->
+    <section class="rsv-section" id="rsvPartySizeSection">
+      <div class="rsv-section__head">
+        <span class="rsv-section__step">
+          <span class="rsv-stepno">1</span>
+          <span class="rsv-steplabel">Počet osob</span>
+        </span>
+        <span class="rsv-stepvalue" id="rsvPartySizeValue"></span>
+      </div>
+      <div class="rsv-time-grid" id="rsvPartySizeRow"></div>
+    </section>
+
+    <!-- Day strip: next RESERVATION_DAYS_AHEAD days, today preselected -->
+    <section class="rsv-section" id="rsvDayStripSection">
+      <div class="rsv-section__head">
+        <span class="rsv-section__step">
+          <span class="rsv-stepno">2</span>
+          <span class="rsv-steplabel">Den</span>
+        </span>
+        <!-- Was a bare "ČERVENEC 2026" month label; now the step's chosen
+             value (renderer.js/updateMonthLabel writes the selected date in
+             full), so the month is still stated and the choice stays on
+             screen once you have scrolled past the strip. -->
+        <span class="rsv-stepvalue" id="rsvMonthLabel"></span>
+      </div>
+      <div class="rsv-day-strip" id="rsvDayStrip"></div>
+      <div class="rsv-scroll-hint"><div class="rsv-scroll-hint__fill" id="rsvScrollHintFill"></div></div>
+    </section>
+
+    <!-- Time grid: all opening hours, booked ones struck-through but visible -->
+    <section class="rsv-section" id="rsvTimeGridSection">
+      <div class="rsv-section__head">
+        <span class="rsv-section__step">
+          <span class="rsv-stepno">3</span>
+          <span class="rsv-steplabel">Čas</span>
+        </span>
+        <span class="rsv-stepvalue" id="rsvTimeValue"></span>
+      </div>
+      <div class="rsv-time-grid" id="rsvTimeGrid"></div>
+    </section>
+
+    <!-- Tables free at the selected day + hour. floorplan-table-picking
+         design §6.1: rsvFloorplan is filled by FloorPlan.render() (renderer.js)
+         with a to-scale plan when settings.floorplan.rooms is configured —
+         occupied tables stay drawn in place, greyed out, rather than being
+         hidden. Tables with no `layout` (every table today, until an admin
+         places them via the future Rozložení editor) fall back to the plain
+         rsvTablesList rows below it, unchanged in markup from before this
+         feature. When no rooms are configured at all, rsvFloorplan stays
+         empty and rsvTablesList alone carries the whole section, exactly as
+         before. -->
+    <section class="rsv-section" id="rsvTablesSection">
+      <div class="rsv-section__head">
+        <span class="rsv-section__step">
+          <span class="rsv-stepno">4</span>
+          <span class="rsv-steplabel">Stůl</span>
+        </span>
+        <!-- renderer.js writes how many tables are actually free at the
+             chosen day+hour here; it used to repeat the selected hour, which
+             step 3 already states on its own line. -->
+        <span class="rsv-stepvalue" id="rsvTablesLabel"></span>
+      </div>
+      <div id="rsvFloorplan"></div>
+      <div class="rsv-section__head rsv-hidden" id="rsvUnplacedHead"><span class="ds-microlabel">Nezařazené stoly</span></div>
+      <div class="rsv-tables-list" id="rsvTablesList">
+        <p class="ds-empty">Nejprve vyberte čas.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="rsv-footer">
+    <!-- go-live Task 5 (spec §7): populated client-side from GET /settings
+         (see fetchRestaurantSettings()/renderFooterBusinessLine() in
+         renderer.js) — the static "[doplnit]" placeholder text is gone. -->
+    <span id="footerBusinessLine"></span>
+    <nav class="rsv-footer__links">
+      <a href="/reservation/obchodni-podminky">Obchodní podmínky</a>
+      <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
+      <a href="/reservation/reklamace">Reklamační řád</a>
+    </nav>
+  </footer>
+
+  <!-- ── Booking sheet: duration + name/phone + optional food preorder → SMS code → success ── -->
+  <div class="ds-sheet__backdrop" id="rsvSheetBackdrop"></div>
+  <div class="ds-sheet" id="rsvSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="rsvStepDetailsTitle">
+    <div class="ds-sheet__handle"></div>
+
+    <div id="rsvStepDetails" class="rsv-step active">
+      <h3 class="rsv-sheet-title" id="rsvStepDetailsTitle">Zarezervovat stůl</h3>
+      <p class="rsv-sheet-summary" id="rsvStepDetailsSummary"></p>
+
+      <div class="rsv-field-group">
+        <label id="rsvDurationLabel">Délka rezervace</label>
+        <div class="rsv-duration-row" id="rsvDurationRow"></div>
+      </div>
+
+      <div class="rsv-field-group">
+        <label for="rsvNameInput">Vaše jméno</label>
+        <input type="text" id="rsvNameInput" class="ds-input" placeholder="Jméno a příjmení" autocomplete="name">
+      </div>
+
+      <div class="rsv-field-group">
+        <label for="rsvPhoneInput">Telefonní číslo</label>
+        <input type="tel" id="rsvPhoneInput" class="ds-input" placeholder="+420 601 234 567" autocomplete="tel">
+      </div>
+
+      <div class="rsv-expander" id="rsvOrderExpander">
+        <button type="button" class="rsv-expander__toggle" id="rsvOrderToggle" aria-expanded="false">
+          <span>Předobjednat jídlo? (volitelné)</span>
+          <span class="rsv-expander__toggle-icon">▾</span>
+        </button>
+        <div class="rsv-expander__body">
+          <div id="rsvOrderCategories"></div>
+          <div class="rsv-order-total">
+            <span>Celkem</span>
+            <strong id="rsvOrderTotalText">0 Kč</strong>
+          </div>
+        </div>
+      </div>
+
+      <p class="rsv-hint">Na zadané číslo pošleme ověřovací SMS kód. Platba na místě, pokud nezvolíte platbu online u předobjednaného jídla.</p>
+
+      <div class="rsv-sheet-actions">
+        <button type="button" class="ds-btn ds-btn--ghost" id="rsvCancelBtn">Zrušit</button>
+        <button type="button" class="ds-btn ds-btn--primary" id="rsvConfirmBtn">Odeslat ověřovací kód</button>
+      </div>
+    </div>
+
+    <div id="rsvStepCode" class="rsv-step">
+      <h3 class="rsv-sheet-title">Ověření telefonu</h3>
+      <p class="rsv-sheet-summary">Poslali jsme SMS kód na číslo <strong id="rsvCodeSentTo"></strong>. Opište jej sem pro potvrzení rezervace.</p>
+
+      <div class="rsv-field-group">
+        <label for="rsvCodeInput">Ověřovací kód</label>
+        <input type="text" id="rsvCodeInput" class="ds-input rsv-code-input" placeholder="123456" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+      </div>
+      <p class="rsv-code-error" id="rsvCodeError"></p>
+
+      <div class="rsv-sheet-actions">
+        <button type="button" class="ds-btn ds-btn--ghost" id="rsvBackBtn">Zpět</button>
+        <button type="button" class="ds-btn ds-btn--primary" id="rsvVerifyBtn">Potvrdit kód</button>
+      </div>
+      <button type="button" class="ds-btn ds-btn--ghost ds-btn--block rsv-resend-btn" id="rsvResendBtn">Poslat znovu</button>
+    </div>
+
+    <div id="rsvStepSuccess" class="rsv-step">
+      <div class="rsv-success">
+        <!-- Drawn rather than typeset: the stroke is what animates in
+             (reservation.css SUCCESS block), and a real path keeps the mark
+             identical on every platform's font stack. -->
+        <div class="rsv-success__icon" aria-hidden="true">
+          <svg class="rsv-success__mark" viewBox="0 0 26 26" fill="none"><path d="M4 13.5 L10.5 20 L22 6.5"/></svg>
+        </div>
+        <div class="rsv-success__title">Rezervace potvrzena</div>
+        <p class="rsv-success__summary" id="rsvSuccessSummary"></p>
+      </div>
+      <div class="rsv-sheet-actions">
+        <button type="button" class="ds-btn ds-btn--dark ds-btn--block" id="rsvSuccessCloseBtn">Hotovo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Payment hand-off sheet: offered only when a food order was attached ── -->
+  <div class="ds-sheet__backdrop" id="rsvPaySheetBackdrop"></div>
+  <div class="ds-sheet" id="rsvPaySheet" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="ds-sheet__handle"></div>
+    <div class="rsv-success">
+      <div class="rsv-success__icon">✓</div>
+      <div class="rsv-success__title">Rezervace potvrzena</div>
+      <p class="rsv-success__summary" id="rsvPaySummary"></p>
+    </div>
+    <div id="rsvPayStatus"></div>
+    <div class="rsv-sheet-actions" id="rsvPayActions">
+      <button type="button" class="ds-btn ds-btn--ghost" id="rsvPayLaterBtn">Zaplatím na místě</button>
+      <button type="button" class="ds-btn ds-btn--primary" id="rsvPayOnlineBtn">Zaplatit online</button>
+    </div>
+  </div>
+
+  <!-- ── Combo customize sheet: opened via "Přizpůsobit" inside the food
+       pre-order expander above. Stacks ON TOP of rsvSheet (both can be open
+       at once — the customer is mid-way through the booking sheet when they
+       reach for this one), so it reuses the generic .ds-sheet/__backdrop
+       component but gets its own higher z-index via the rsv-combo-sheet*
+       classes below (see reservation.css) rather than relying on DOM order.
+       Content (slots/extras) is fully dynamic — built by renderer.js's
+       renderComboSheetContents() — since it depends on the combo clicked. ── -->
+  <div class="ds-sheet__backdrop rsv-combo-sheet__backdrop" id="rsvComboSheetBackdrop"></div>
+  <div class="ds-sheet rsv-combo-sheet" id="rsvComboSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="rsvComboSheetTitle">
+    <div class="ds-sheet__handle"></div>
+    <h3 class="rsv-sheet-title" id="rsvComboSheetTitle"></h3>
+    <p class="rsv-sheet-summary" id="rsvComboSheetDesc"></p>
+
+    <div id="rsvComboSlots"></div>
+    <div id="rsvComboExtras"></div>
+
+    <div class="rsv-field-group">
+      <label for="rsvComboNoteInput">Poznámka (nepovinné)</label>
+      <input type="text" id="rsvComboNoteInput" class="ds-input" maxlength="200" placeholder="např. bez cibule">
+    </div>
+
+    <div class="rsv-order-total">
+      <span>Cena</span>
+      <strong id="rsvComboTotalText">0 Kč</strong>
+    </div>
+
+    <div class="rsv-sheet-actions">
+      <button type="button" class="ds-btn ds-btn--ghost" id="rsvComboCancelBtn">Zrušit</button>
+      <button type="button" class="ds-btn ds-btn--primary" id="rsvComboAddBtn">Přidat</button>
+    </div>
+  </div>
+
+  <div class="ds-toast" id="rsvToast"></div>
+
+  <script src="/reservation/config.js"></script>
+  <!-- Shared floorplan module (design §5.1) — must load before renderer.js,
+       which calls FloorPlan.render()/.partitionTables() while building the
+       tables section. -->
+  <script src="/reservation/js/floorplan.js"></script>
+  <script src="/reservation/js/renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,684 @@
+/* ============================================================================
+   delivery-page.css — page-specific styles for delivery.html (Rozvoz).
+   Builds on design.css tokens/components. Nothing here is consumed by other
+   pages.
+   ============================================================================ */
+
+html {
+  overflow-x: hidden;
+}
+body {
+  /* NOTE: overflow-x must NOT be set on body here (only on html above) —
+     setting overflow-x without overflow-y on an element implicitly forces
+     overflow-y to "auto" on that element too (CSS Overflow spec), which
+     would make body its own scroll container. The page actually scrolls
+     via documentElement (window.scrollY), so body's scrollTop would stay 0
+     and any position:sticky descendant (the category nav) would never
+     stick — this was caught live in the browser pane during verification.
+   */
+  min-height: 100vh;
+  /* room for the sticky cart bar */
+  padding-bottom: 96px;
+}
+
+.del-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 4px 20px 40px;
+}
+
+/* ── Poster hero ──────────────────────────────────────────────────────────── */
+.del-hero {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 20px 4px;
+}
+
+/* ── "Objednat znovu" chip (spec: docs/superpowers/specs/2026-07-25-
+   reorder-design.md §8) — sits right under the poster heading, "near the
+   top of the menu" per spec, so it's visible without any scrolling. ──── */
+.del-reorder-chip {
+  margin-top: 14px;
+}
+
+/* ── Category nav: sticky chip row, scroll-spy highlight ─────────────────── */
+.del-cat-nav {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 12px 20px;
+  background: var(--ds-bg);
+  border-bottom: 1px solid var(--ds-border);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.del-cat-nav::-webkit-scrollbar { display: none; }
+.del-cat-nav .ds-chip { flex: 0 0 auto; }
+
+/* ── Menu sections ────────────────────────────────────────────────────────── */
+.del-menu-section {
+  padding-top: 20px;
+  scroll-margin-top: 58px; /* clears the sticky category nav when jumped to */
+}
+.del-menu-section__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.del-menu-section__count {
+  font-size: 11px;
+  color: var(--ds-faint);
+}
+
+.del-dish-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Dish row — rule-separated (border-top per row, last row also closes with
+   a border-bottom); no gap between rows, no drawn box around each item. ── */
+.del-dish {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 2px;
+  border-top: 1px solid var(--ds-rule);
+  transition: background-color .15s ease;
+}
+.del-dish-list .del-dish:last-child { border-bottom: 1px solid var(--ds-rule); }
+.del-dish:hover { background: #f7f7f7; }
+.del-dish__thumb {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: 0;
+  object-fit: cover;
+  background: #f2f2f2;
+}
+.del-dish__thumb--placeholder {
+  background: #f2f2f2;
+}
+.del-dish__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.del-dish__name { font-size: 14px; font-weight: 600; color: var(--ds-ink); }
+.del-dish__info {
+  font-size: 12px;
+  color: var(--ds-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.del-dish__price { font-size: 13px; font-weight: 700; color: var(--ds-accent); margin-top: 2px; }
+
+/* ── Polední menu (highlighted section, go-live Task 3, spec §5) ─────────
+   Distinct within the design system via an accent left rule + faint tint,
+   not a whole new visual language — same tokens as everywhere else. ── */
+.del-menu-section--daily {
+  border: 1px solid var(--ds-accent);
+  border-left-width: 3px;
+  background: var(--ds-accent-soft);
+  padding: 16px 16px 4px;
+  margin-bottom: 4px;
+}
+.del-menu-section--daily .ds-microlabel { color: var(--ds-accent); }
+.del-menu-section--daily .del-dish-list .del-dish:last-child { border-bottom: none; }
+
+/* ── Sold-out dish row (go-live Task 3, spec §5) — faded, badge next to the
+   name, no add button/stepper (see buildDishAction in delivery.js). ── */
+.del-dish--soldout { opacity: 0.55; }
+.del-dish--soldout:hover { background: none; }
+.del-dish__name .ds-badge { margin-left: 6px; vertical-align: middle; }
+
+.del-dish__action { flex-shrink: 0; }
+.del-dish__add {
+  width: 34px;
+  height: 34px;
+  border-radius: 0;
+  border: 1px solid var(--ds-rule);
+  background: var(--ds-surface);
+  color: var(--ds-ink);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color .15s ease, color .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.del-dish__add:hover { background: var(--ds-ink); color: #fff; }
+
+/* ── Sticky cart bar ──────────────────────────────────────────────────────── */
+.del-cartbar {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 20px;
+  border: none;
+  border-radius: 0;
+  background: var(--ds-ink);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.del-cartbar[hidden] { display: none; }
+.del-cartbar__total {
+  color: var(--ds-accent);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Checkout sheet ───────────────────────────────────────────────────────── */
+.del-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.del-sheet-title { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
+.del-sheet-close {
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--ds-muted);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.del-cart-items {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 8px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.del-cart-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ds-border);
+}
+.del-cart-row:last-child { border-bottom: none; padding-bottom: 0; }
+.del-cart-row__info { flex: 1; min-width: 0; }
+.del-cart-row__name { font-size: 13px; font-weight: 600; color: var(--ds-ink); }
+.del-cart-row__meta { font-size: 12px; color: var(--ds-muted); margin-top: 1px; }
+.del-cart-row__total {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ds-ink);
+  white-space: nowrap;
+  min-width: 56px;
+  text-align: right;
+}
+
+.del-cart-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 12px 0;
+  margin-bottom: 6px;
+  border-top: 1px solid var(--ds-border);
+  border-bottom: 1px solid var(--ds-border);
+}
+.del-cart-total-row span:last-child { color: var(--ds-accent); font-size: 17px; }
+
+/* ── Delivery pricing summary — subtotal + fee + free-above/ETA hints
+   (settings.delivery — fee/minOrder/freeAbove/etaMinutes, go-live Task 2).
+   Server is the actual authority (POST /orders re-quotes via
+   settingsStore.quoteDelivery) — this is a live client-side preview only. ── */
+.del-cart-summary__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--ds-ink-soft);
+  padding: 4px 0;
+}
+.del-free-above-hint {
+  font-size: 12px;
+  color: var(--ds-accent);
+  font-weight: 600;
+  margin: 6px 0 0;
+  line-height: 1.4;
+}
+.del-eta-line {
+  font-size: 12px;
+  color: var(--ds-muted);
+  text-align: center;
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+.del-min-order-hint {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ds-warn-ink);
+  background: var(--ds-warn-bg);
+  text-align: center;
+  padding: 8px 12px;
+  border-radius: var(--ds-radius);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.del-success__total {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ds-ink);
+  margin-bottom: 6px;
+}
+
+.del-field-group { margin-bottom: 14px; }
+.del-field-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ds-ink-soft);
+  margin-bottom: 6px;
+}
+
+/* ── Payment method rows — rule-separated, ■/□ selection marks (no bordered
+   cards, no tinted fill on selection). ── */
+.del-pay-options {
+  display: flex;
+  flex-direction: column;
+}
+.del-pay-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 2px;
+  border: none;
+  border-top: 1px solid var(--ds-rule);
+  background: transparent;
+  cursor: pointer;
+  transition: background-color .15s ease;
+}
+.del-pay-options .del-pay-option:last-child { border-bottom: 1px solid var(--ds-rule); }
+.del-pay-option:hover { background: #f7f7f7; }
+.del-pay-option input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.del-pay-option__mark {
+  flex-shrink: 0;
+  width: 16px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ds-ink);
+}
+.del-pay-option__mark::before { content: "\25A1"; } /* □ unselected */
+.del-pay-option--selected .del-pay-option__mark::before { content: "\25A0"; } /* ■ selected */
+.del-pay-option__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.del-pay-option__title { font-size: 13px; font-weight: 600; color: var(--ds-ink); }
+.del-pay-option__desc { font-size: 11px; color: var(--ds-muted); }
+
+.del-hint {
+  font-size: 12px;
+  color: var(--ds-muted);
+  text-align: center;
+  margin: 10px 0 0;
+  line-height: 1.5;
+}
+
+/* ── Order confirmation / payment status sheet ───────────────────────────── */
+.del-success {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+.del-success__icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 14px;
+  border-radius: 0;
+  background: var(--ds-ink);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 800;
+}
+.del-success__title { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+.del-success__ref-label { font-size: 12px; color: var(--ds-muted); margin-bottom: 4px; }
+.del-success__ref {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--ds-ink);
+  margin-bottom: 6px;
+}
+.del-success__note { font-size: 12px; color: var(--ds-muted); line-height: 1.5; }
+
+.del-payonline-note,
+.del-payonline-waiting,
+.del-payonline-failed {
+  font-size: 13px;
+  text-align: center;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+.del-payonline-note { color: var(--ds-warn-ink); background: var(--ds-warn-bg); padding: 8px 12px; border-radius: var(--ds-radius); }
+.del-payonline-waiting { color: var(--ds-ink-soft); }
+.del-payonline-paid { color: var(--ds-success); font-weight: 700; text-align: center; margin: 10px 0; }
+.del-payonline-failed { color: var(--ds-danger); }
+
+#orderConfirmedModal .ds-btn { margin-top: 10px; }
+#orderPaymentStatus .ds-btn { margin: 8px auto 0; display: flex; }
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+.del-footer {
+  max-width: 720px;
+  margin: 24px auto 0;
+  padding: 24px 20px;
+  font-size: 12px;
+  color: var(--ds-muted);
+  text-align: center;
+  border-top: 1px solid var(--ds-border);
+}
+/* go-live Task 5 (spec §7): links to the three legal template pages,
+   underneath the business-identity line filled in by delivery.js. */
+.del-footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 12px;
+  margin-top: 8px;
+}
+.del-footer__links a { color: var(--ds-ink); text-decoration: underline; }
+
+/* ── Closed/paused banner (settings.delivery.paused / outside hours) ────── */
+.del-notice {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 12px 20px;
+  background: var(--ds-warn-bg);
+  color: var(--ds-warn-ink);
+  border-bottom: 1px solid var(--ds-warn-ink);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ============================================================================
+   COMBO MENUS ("Zvýhodněná menu") — spec:
+   docs/superpowers/specs/2026-07-22-combo-menus-design.md
+   Combo cards (list + customize dialog). Reuses the same tokens/components
+   as the rest of the page (ds-sheet, ds-badge, ds-btn, ds-input) — nothing
+   here introduces a new visual language, just a few combo-specific rows.
+   ============================================================================ */
+
+/* ── Combos section — accent-styled like .del-menu-section--daily (its own
+   modifier so the two can diverge later without fighting each other). ──── */
+.del-menu-section--combos {
+  border: 1px solid var(--ds-accent);
+  border-left-width: 3px;
+  background: var(--ds-accent-soft);
+  padding: 16px 16px 4px;
+  margin-bottom: 4px;
+}
+.del-menu-section--combos .ds-microlabel { color: var(--ds-accent); }
+
+.del-combo-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Combo card — same row skeleton as .del-dish (thumb + body + action),
+   just a taller body (description + contents summary lines). ──────────── */
+.del-combo {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 2px;
+  border-top: 1px solid var(--ds-rule);
+}
+.del-combo-list .del-combo:last-child { border-bottom: none; }
+.del-combo__thumb {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: 0;
+  object-fit: cover;
+  background: #f2f2f2;
+}
+.del-combo__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.del-combo__name { font-size: 14px; font-weight: 600; color: var(--ds-ink); }
+.del-combo__desc {
+  font-size: 12px;
+  color: var(--ds-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.del-combo__contents {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ds-ink-soft);
+}
+.del-combo__price { font-size: 13px; font-weight: 700; color: var(--ds-accent); margin-top: 2px; }
+
+/* Sold-out combo — same faded + badge-next-to-name treatment as
+   .del-dish--soldout, no action button rendered (see buildComboAction()). */
+.del-combo--soldout { opacity: 0.55; }
+.del-combo__name .ds-badge { margin-left: 6px; vertical-align: middle; }
+
+.del-combo__action { flex-shrink: 0; align-self: center; }
+.del-combo__customize-btn { font-size: 12px; padding: 8px 14px; white-space: nowrap; }
+
+/* ── Customize dialog — per-slot swap/remove radio groups + extras
+   checkboxes. Native inputs (not the custom □/■ marks .del-pay-option
+   uses) — this dialog has many more, denser rows, so keeping the browser's
+   own control is clearer than a bespoke mark at this density. ──────────── */
+.del-combo-dialog__desc {
+  font-size: 13px;
+  color: var(--ds-muted);
+  margin: -4px 0 14px;
+  line-height: 1.5;
+}
+.del-combo-dialog__desc:empty { display: none; }
+
+.del-combo-slot { margin-bottom: 16px; }
+.del-combo-slot__label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ds-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: .02em;
+  margin-bottom: 6px;
+}
+.del-combo-slot__options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.del-combo-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  font-size: 13px;
+  color: var(--ds-ink);
+  cursor: pointer;
+}
+.del-combo-option input { flex-shrink: 0; accent-color: var(--ds-ink); }
+
+.del-combo-dialog__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.del-combo-dialog__actions .ds-btn { flex: 1; }
+
+/* ============================================================================
+   REORDER ("Objednat znovu") — spec:
+   docs/superpowers/specs/2026-07-25-reorder-design.md §8. Same shared-sheet
+   pattern as the combo dialog above: one sheet, content rebuilt per state by
+   delivery.js. Reuses .del-field-group/.ds-input/.ds-btn wherever those
+   already fit (phone/code form) and adds a handful of order-card-specific
+   rows below.
+   ============================================================================ */
+.del-reorder-intro {
+  font-size: 13px;
+  color: var(--ds-muted);
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+
+/* Inline validation/server-error text under the phone/code inputs — same
+   warn palette as .del-min-order-hint, but left-aligned and un-boxed since
+   it sits directly under a single input rather than as its own banner. */
+.del-reorder-error {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ds-warn-ink);
+  margin: -6px 0 14px;
+  line-height: 1.4;
+}
+.del-reorder-error[hidden] { display: none; }
+
+.del-reorder-back-btn { margin-top: 10px; }
+
+/* Fine print under the "Poslat kód" button — tells the customer, BEFORE they
+   verify, that a successful verification leaves a 90-day cookie on this
+   device (see reorderCookieOptions() in src/server/reorder.js and §6 of
+   ochrana-osobnich-udaju.html). Deliberately quieter than .del-reorder-intro:
+   it's a disclosure, not an instruction, and shouldn't compete with the
+   action it sits below. */
+.del-reorder-note {
+  font-size: 11px;
+  color: var(--ds-muted);
+  margin: 12px 0 0;
+  line-height: 1.5;
+}
+.del-reorder-note a { color: inherit; text-decoration: underline; }
+
+/* ── Order cards (verified state) — one per past order, rule-separated like
+   .del-dish rows rather than individually boxed. ────────────────────────── */
+.del-reorder-order {
+  padding: 14px 2px;
+  border-top: 1px solid var(--ds-rule);
+}
+.del-reorder-order:last-of-type { border-bottom: 1px solid var(--ds-rule); }
+
+.del-reorder-order__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.del-reorder-order__date {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ds-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.del-reorder-order__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.del-reorder-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--ds-ink);
+}
+.del-reorder-line__name { min-width: 0; }
+.del-reorder-line__total {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--ds-ink);
+}
+/* Unavailable line: struck through name, its reason shown instead of a
+   price (spec: "Lines with available: false are struck through and show
+   their reason"). */
+.del-reorder-line--unavailable {
+  color: var(--ds-faint);
+}
+.del-reorder-line--unavailable .del-reorder-line__name {
+  text-decoration: line-through;
+}
+.del-reorder-line__reason {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-style: italic;
+  text-align: right;
+}
+
+.del-reorder-order__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.del-reorder-order__total { font-size: 14px; font-weight: 700; color: var(--ds-ink); }
+.del-reorder-order__warn { font-size: 11px; color: var(--ds-warn-ink); font-weight: 600; text-align: right; }
+
+/* ── "Nejsem to já" — a quiet text link, not a full button, so it doesn't
+   compete with the primary "Objednat znovu" actions above it. ──────────── */
+.del-reorder-forget {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px 0 0;
+  border: none;
+  background: none;
+  color: var(--ds-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-align: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.del-reorder-forget:hover { color: var(--ds-ink); }

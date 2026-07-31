@@ -1,0 +1,433 @@
+/* ============================================================================
+   floorplan.css — styles for the shared FloorPlan module (src/js/floorplan.js).
+   Loaded by index.html (customer table picker) and inner.html (waiter view,
+   admin Přehled, admin Rozložení editor). See
+   docs/superpowers/specs/2026-07-27-floorplan-table-picking-design.md §4-§5.
+
+   Building on design.css tokens only — no new colours, border-radius 0
+   everywhere (this is a flat Swiss/International Typographic Style system,
+   the same rule design.css itself follows). Class names below
+   (.fp-*) are the CONTRACT the admin Rozložení editor (Track D) also draws
+   on for its drag/tray UI, even though FloorPlan.render() itself only ever
+   produces .fp-root/.fp-rooms/.fp-viewport/.fp-canvas/.fp-walls/.fp-table/
+   .fp-fixture markup — see the "unplaced tray" and "corner handles" blocks
+   further down for the editor-only classes FloorPlan.render() never emits
+   itself. See also
+   docs/superpowers/specs/2026-07-28-room-shape-editing-design.md §3-§5 for
+   the polygon walls, corner handles and .fp-table--outside flag added on
+   top of the original floorplan-table-picking design.
+   ============================================================================ */
+
+.fp-root {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Room switcher — plain .ds-chip row, reused verbatim ─────────────────── */
+.fp-rooms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── Canvas viewport — horizontal scroll on narrow phones so a wide room
+   never squishes its tables past legibility; the room itself still scales
+   fluidly (min-width just sets a floor). ────────────────────────────────── */
+.fp-viewport {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+/* ── Canvas — the room. aspect-ratio (set inline per-room by floorplan.js
+   from room.width/room.height, design §4.3) is what keeps every table and
+   fixture square at any viewport width with zero JS measuring. ─────────── */
+.fp-canvas {
+  position: relative;
+  width: 100%;
+  /* Floor for legibility on a phone; on a portrait room this is what the
+     height cap in floorplan.js negotiates against, so it stays modest. */
+  min-width: 320px;
+  /* A room narrower than its column (any portrait room, once floorplan.js
+     caps the width) would otherwise sit hard against the left edge with the
+     rest of the row empty. */
+  margin-inline: auto;
+  background: var(--ds-surface);
+  border-radius: var(--ds-radius);
+}
+
+/* ============================================================================
+   WALLS — SVG polygon layer, always .fp-canvas's first child (design §3,
+   2026-07-28 room-shape-editing). Replaces the old .fp-canvas CSS `border`,
+   which could only ever draw a rectangle. Every room — including one with no
+   `corners`, which renders FloorPlan.roomCorners()'s implicit rectangle —
+   draws its walls through this one element; there is no separate rectangle
+   vs. polygon styling.
+   ============================================================================ */
+.fp-walls {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.fp-walls polygon {
+  fill: var(--ds-surface);
+  stroke: var(--ds-rule);
+  stroke-width: 2px;
+  /* vector-effect="non-scaling-stroke" (set in floorplan.js) keeps this a
+     crisp 2px regardless of how the room scales. */
+}
+
+/* ============================================================================
+   TABLES — four visual states per design §5.2, drawn from the owner's
+   reference floorplan images.
+   ============================================================================ */
+.fp-table {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px;
+  text-align: center;
+  border-radius: var(--ds-radius);
+  box-sizing: border-box;
+  /* NOT overflow:hidden — the chair bars are children of the table, drawn at
+     top/bottom/left/right: -7px so they sit ON the table's edge. Clipping
+     here erased every chair on the plan, which is the drawing's whole
+     vocabulary for how many people a table seats. The two labels below do
+     their own ellipsis, so nothing needed clipping at this level. */
+}
+
+.fp-table__name {
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--ds-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.fp-table__sublabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ds-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* free — white fill, 2px black rule border, black name, black chairs. */
+.fp-table--free {
+  background: #ffffff;
+  border: 2px solid var(--ds-rule);
+}
+
+/* clickable states get a pointer + a subtle press affordance; occupied and
+   too-small are inert (no cursor, no hover) per design §5.2.
+
+   Hovering a table on the plan is the moment you point at a specific place
+   in a specific room, so it answers physically: the table lifts a hair off
+   the floor and its rule and name go to the accent — a preview of the
+   --selected state it is about to become. Transform and colour only, both
+   composited, on absolutely-positioned elements, so nothing on the canvas
+   reflows and a room full of tables stays smooth. */
+.fp-table {
+  transition: transform var(--ds-dur) var(--ds-ease),
+              border-color var(--ds-dur-fast) ease,
+              background-color var(--ds-dur-fast) ease;
+}
+.fp-table__name,
+.fp-table__sublabel { transition: color var(--ds-dur-fast) ease; }
+
+.fp-table--clickable {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (hover: hover) {
+  .fp-table--clickable:hover {
+    transform: translateY(-3px);
+    border-color: var(--ds-accent);
+    z-index: 3;
+  }
+  .fp-table--clickable:hover .fp-table__name { color: var(--ds-accent); }
+}
+.fp-table--clickable:active { transform: translateY(-1px); }
+.fp-table--clickable:focus-visible {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: 2px;
+  z-index: 3;
+}
+
+/* occupied — filled with the border token, faint border, grey name+chairs. */
+.fp-table--occupied {
+  background: var(--ds-border);
+  border: 2px solid var(--ds-faint);
+}
+.fp-table--occupied .fp-table__name { color: var(--ds-muted); }
+
+/* too-small — same drawing as free, dimmed to 40% opacity. */
+.fp-table--too-small {
+  background: #ffffff;
+  border: 2px solid var(--ds-rule);
+  opacity: .4;
+}
+
+/* selected — free's look plus an accent-coloured border. */
+.fp-table--selected {
+  background: #ffffff;
+  border: 2px solid var(--ds-accent);
+}
+
+/* outside — editor-only flag (design §5.3, room-shape-editing) from
+   FloorPlan.tableOutsideRoom(): the table's rectangle isn't fully inside
+   the room's walls (possible once walls can be angled). Layered as an
+   outline, independent of whichever .fp-table--* state class above is also
+   present, and never rendered on the customer/waiter surfaces. */
+.fp-table--outside {
+  outline: 2px solid var(--ds-danger);
+  outline-offset: 2px;
+}
+
+/* ── Chair bars — one strip per occupied side, evenly spaced along the
+   table's edge (seatSides() decides how many bars per side). ───────────── */
+.fp-chairs {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  pointer-events: none;
+}
+.fp-chairs--top,
+.fp-chairs--bottom {
+  left: 6%;
+  right: 6%;
+  height: 8px;
+}
+.fp-chairs--top { top: -7px; }
+.fp-chairs--bottom { bottom: -7px; }
+.fp-chairs--left,
+.fp-chairs--right {
+  top: 6%;
+  bottom: 6%;
+  width: 8px;
+  flex-direction: column;
+}
+.fp-chairs--left { left: -7px; }
+.fp-chairs--right { right: -7px; }
+
+.fp-chair {
+  display: block;
+  background: var(--ds-rule);
+}
+.fp-chairs--top .fp-chair,
+.fp-chairs--bottom .fp-chair { width: 60%; max-width: 16px; height: 4px; }
+.fp-chairs--left .fp-chair,
+.fp-chairs--right .fp-chair { height: 60%; max-height: 16px; width: 4px; }
+
+/* occupied / too-small tables get grey chairs, matching the greyed-out
+   read of the whole table. */
+.fp-table--occupied .fp-chair { background: var(--ds-faint); }
+
+/* ============================================================================
+   FIXTURES — exactly two types (design §4.2): block and door.
+   ============================================================================ */
+.fp-fixture {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+/* block — grey filled rectangle, centred uppercase letter-spaced label.
+   Used for KUCHYŇ / SCHODY in the reference images. */
+.fp-fixture--block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ds-border);
+  border: 1px solid var(--ds-faint);
+}
+.fp-fixture__label {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--ds-ink-soft);
+  text-align: center;
+}
+
+/* door — quarter-circle swing arc + straight leaf line, no fill. Base
+   orientation (facing:"down") draws the leaf along the left edge (the
+   hinge, at the bottom-left corner) and the arc sweeping from the top-left
+   corner to the bottom-right corner; facing rotates the whole symbol. */
+.fp-fixture--door {
+  transform-origin: center;
+}
+.fp-fixture--door-down { transform: rotate(0deg); }
+.fp-fixture--door-left { transform: rotate(90deg); }
+.fp-fixture--door-up { transform: rotate(180deg); }
+.fp-fixture--door-right { transform: rotate(270deg); }
+
+.fp-door__arc {
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+  border-top-color: var(--ds-rule);
+  border-right-color: var(--ds-rule);
+  border-radius: 0 100% 0 0;
+}
+.fp-door__leaf {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px solid var(--ds-rule);
+}
+.fp-fixture__label--door {
+  position: absolute;
+  bottom: -18px;
+  left: 0;
+  right: 0;
+  font-size: 9px;
+}
+
+/* ============================================================================
+   UNPLACED TABLES TRAY — classes shipped for the admin Rozložení editor
+   (Track D, src/js/inner.js). FloorPlan.render() never produces this markup
+   itself (design §5.1/§9: unplaced tables are the caller's responsibility,
+   normally rendered as a plain .ds-list-row / .inn-dish-add-card list) —
+   these classes exist purely so the *drag-to-place* tray in the layout
+   editor shares the floorplan's visual language instead of inventing a
+   second one. Expected shape:
+     <div class="fp-tray">
+       <div class="fp-tray__item" draggable="true">…table name…</div>
+       ...
+     </div>
+   ============================================================================ */
+.fp-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--ds-rule);
+}
+.fp-tray__item {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border: 2px solid var(--ds-rule);
+  border-radius: var(--ds-radius);
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ds-ink);
+  cursor: grab;
+}
+.fp-tray__item:active { cursor: grabbing; }
+
+/* ============================================================================
+   CORNER HANDLES & EDGE-INSERT AFFORDANCE — classes shipped for the admin
+   Rozložení shape editor (room-shape-editing, `src/js/inner.js`).
+   FloorPlan.render() never produces this markup itself — same courtesy
+   precedent as the "unplaced tables tray" block above: these classes exist
+   so the corner-dragging UI shares the floorplan's visual language instead
+   of inventing a second one. Expected shape — one handle per point from
+   FloorPlan.roomCorners(), one "+" per edge midpoint, each positioned by the
+   caller as a percentage of room width/height exactly like .fp-table:
+
+     <div class="fp-corner" style="left:...%;top:...%" tabindex="0"></div>
+     <div class="fp-corner fp-corner--selected" ...></div>
+     <div class="fp-corner fp-corner--disabled" ...></div>  (gated: room has
+                                                               placed tables —
+                                                               design §5.1)
+     <button class="fp-edge-add" style="left:...%;top:...%">+</button>
+   ============================================================================ */
+.fp-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 2px solid var(--ds-rule);
+  border-radius: var(--ds-radius);
+  cursor: grab;
+  z-index: 2;
+}
+.fp-corner:active { cursor: grabbing; }
+.fp-corner:focus-visible {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: 2px;
+}
+
+/* selected — matches .fp-table--selected's accent language. */
+.fp-corner--selected {
+  background: var(--ds-accent);
+  border-color: var(--ds-accent);
+}
+
+/* disabled — the empty-room gate (design §5.1): greyed out and inert while
+   the active room still has placed tables. */
+.fp-corner--disabled {
+  background: var(--ds-border);
+  border-color: var(--ds-faint);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* edge-midpoint "+" — click to insert a corner via FloorPlan.insertCornerAt.
+   Dashed to read as an affordance rather than a placed object. */
+.fp-edge-add {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin-left: -9px;
+  margin-top: -9px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px dashed var(--ds-faint);
+  border-radius: var(--ds-radius);
+  color: var(--ds-muted);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+}
+.fp-edge-add:hover { border-color: var(--ds-rule); color: var(--ds-ink); }
+.fp-edge-add:focus-visible {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: 2px;
+}
+.fp-edge-add[disabled] {
+  cursor: not-allowed;
+  pointer-events: none;
+  color: var(--ds-faint);
+}
+
+/* ── Small screens — the room switcher's chips scroll rather than wrap
+   awkwardly on very narrow phones; the canvas keeps its own horizontal
+   scroll from .fp-viewport above. ───────────────────────────────────────── */
+@media (max-width: 420px) {
+  .fp-rooms {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .fp-rooms::-webkit-scrollbar { display: none; }
+  .fp-rooms__chip { flex: 0 0 auto; }
+}

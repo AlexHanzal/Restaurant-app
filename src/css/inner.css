@@ -1,0 +1,2122 @@
+/* ============================================================================
+   inner.css — warm-minimal admin re-skin (UI redesign Task 3).
+   Same class/ID contract as before (inner.js is untouched), restyled onto
+   the shared design.css tokens (`--ds-*`, see that file's header). Only
+   inner.html links this file — driver/kitchen/delivery own their pages now.
+   Local custom properties below (--ink, --accent, --line, …) are kept as
+   thin aliases to `--ds-*` tokens so the many `var(--muted)` / `var(--mono)`
+   inline styles still written by inner.js keep resolving without needing
+   any JS changes — the values themselves are 100% design-system tokens.
+   ============================================================================ */
+
+:root {
+    /* ── local aliases onto design.css tokens (contract preserved for
+       inner.js's inline styles: var(--muted), var(--mono), var(--danger)) ── */
+    --ink: var(--ds-ink);
+    --ink-soft: var(--ds-ink-soft);
+    --paper: var(--ds-bg);
+    --panel: var(--ds-surface);
+    --line: var(--ds-border);
+    --line-soft: var(--ds-border);
+    /* Primary 1px black rule for drawn boxes (cards/panels/modals) — distinct
+       from --line, which stays a quiet grey hairline for internal dividers. */
+    --rule: var(--ds-rule);
+
+    --accent: var(--ds-accent);
+    --accent-deep: var(--ds-accent-hover);
+    --accent-soft: var(--ds-accent-soft);
+
+    --ok: var(--ds-success);
+    --ok-soft: var(--ds-success-soft);
+    --warn: var(--ds-warn-ink);
+    --warn-soft: var(--ds-warn-bg);
+    --danger: var(--ds-danger);
+    --danger-soft: color-mix(in srgb, var(--ds-danger) 12%, white);
+
+    --muted: var(--ds-muted);
+    /* No monospace family in the warm-minimal system — one typeface
+       (Inter), hierarchy by weight/size only. Numeric columns get
+       tabular-nums where it matters instead of a mono face. */
+    --mono: var(--ds-font);
+    --serif: var(--ds-font);
+    --body-font: var(--ds-font);
+
+    --radius-sm: var(--ds-radius);
+    --radius: var(--ds-radius-lg);
+    --radius-lg: var(--ds-radius-lg);
+    --shadow-sm: var(--ds-shadow);
+    --shadow-md: var(--ds-shadow);
+    --shadow-lg: var(--ds-shadow);
+
+    /* ── Sidebar nav glyphs (see the "Nav glyphs" block further down) ──────
+       One drawn family replacing nine emoji: 24px box, 1.75 stroke, square
+       caps and joins, no fill — the same drawing language as the floorplan's
+       walls and chair bars. Used as mask-image, so the colour comes from the
+       tile, not from the asset. Inlined as data URIs to keep the page's
+       "no external requests" rule intact and avoid nine round trips. */
+    --glyph-overview: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Crect x='3' y='3' width='7.5' height='7.5'/%3E%3Crect x='13.5' y='3' width='7.5' height='7.5'/%3E%3Crect x='3' y='13.5' width='7.5' height='7.5'/%3E%3Crect x='13.5' y='13.5' width='7.5' height='7.5'/%3E%3C/svg%3E");
+    --glyph-detail: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Ccircle cx='10.5' cy='10.5' r='7'/%3E%3Cpath d='M15.6 15.6 21 21'/%3E%3C/svg%3E");
+    --glyph-waiter: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Cpath d='M3 17.5h18'/%3E%3Cpath d='M4.5 17.5a7.5 7.5 0 0 1 15 0'/%3E%3Cpath d='M12 6.5V4.5'/%3E%3C/svg%3E");
+    --glyph-menu: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Crect x='4.5' y='2.5' width='15' height='19'/%3E%3Cpath d='M8 7.5h8M8 11.5h8M8 15.5h5'/%3E%3C/svg%3E");
+    --glyph-sales: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Cpath d='M3 21h18'/%3E%3Crect x='4.5' y='12' width='4' height='6'/%3E%3Crect x='10' y='7.5' width='4' height='10.5'/%3E%3Crect x='15.5' y='4' width='4' height='14'/%3E%3C/svg%3E");
+    --glyph-users: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Ccircle cx='12' cy='8' r='4'/%3E%3Cpath d='M4.5 21a7.5 7.5 0 0 1 15 0'/%3E%3C/svg%3E");
+    --glyph-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Cpath d='M3 7h18M3 17h18'/%3E%3Crect x='7' y='4' width='4' height='6'/%3E%3Crect x='13' y='14' width='4' height='6'/%3E%3C/svg%3E");
+    --glyph-layout: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Crect x='2.5' y='4.5' width='19' height='15'/%3E%3Cpath d='M2.5 12h9.5V4.5'/%3E%3C/svg%3E");
+    --glyph-daily: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='square'%3E%3Crect x='3' y='5' width='18' height='16'/%3E%3Cpath d='M3 10h18M8 2.5v4M16 2.5v4'/%3E%3C/svg%3E");
+}
+
+* { box-sizing: border-box; }
+
+.admin-only { display: none; }
+body.is-admin .admin-only { display: revert; }
+
+body {
+    margin: 0;
+    font-family: var(--body-font);
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ─── HEADER / TOPBAR ────────────────────────────────────────────────── */
+
+.inn-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 28px;
+    background: var(--panel);
+    color: var(--ink);
+    border-bottom: 2px solid var(--rule);
+    box-shadow: var(--shadow-sm);
+    position: sticky;
+    top: 0;
+    z-index: 60;
+}
+
+.inn-topbar h1 {
+    font-family: var(--serif);
+    font-size: 1.25em;
+    font-weight: 800;
+    margin: 0;
+    color: var(--ink);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    letter-spacing: -0.02em;
+}
+
+.inn-topbar h1 .eyebrow {
+    font-family: var(--ds-font);
+    font-size: 0.42em;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--ds-accent);
+    font-weight: 800;
+    background: none;
+    border: none;
+    padding: 0;
+    border-radius: 0;
+}
+
+.inn-topbar-meta {
+    font-family: var(--ds-font);
+    font-size: 0.8em;
+    color: var(--muted);
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
+.inn-conn-dot {
+    width: 8px; height: 8px;
+    border-radius: 0;
+    background: var(--ok);
+    display: inline-block;
+    margin-right: 6px;
+}
+.inn-conn-dot.bad { background: var(--danger); }
+
+/* ─── LAYOUT ─────────────────────────────────────────────────────────── */
+
+.inn-layout {
+    display: grid;
+    grid-template-columns: 272px 1fr;
+    min-height: calc(100vh - 64px);
+}
+
+/* ─── SIDEBAR ────────────────────────────────────────────────────────── */
+
+.inn-sidebar {
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+    padding: 22px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    overflow-y: auto;
+}
+
+.inn-sidebar-section h2 {
+    font-family: var(--ds-font);
+    font-size: 0.68em;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ds-ink-soft);
+    margin: 0 0 10px 4px;
+    font-weight: 700;
+}
+
+.inn-summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.inn-summary-card {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+}
+
+.inn-summary-card .num {
+    font-family: var(--serif);
+    font-size: 1.7em;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-summary-card .label {
+    font-size: 0.7em;
+    color: var(--muted);
+    margin-top: 5px;
+    font-weight: 500;
+}
+
+.inn-table-nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* Selection reads as ink, not as a coloured stripe. A 2.5px accent
+   border-left on a list row is the standard "highlighted item" tell and it
+   was also the only thing marking selection here — easy to miss in a long
+   scrolling list. Filling the row states it plainly, and the 2px black edge
+   keeps the left-alignment the stripe gave. */
+.inn-table-nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: background-color var(--ds-dur-fast) ease,
+                border-color var(--ds-dur-fast) ease,
+                color var(--ds-dur-fast) ease;
+    font-size: 0.9em;
+}
+
+.inn-table-nav-item:hover {
+    background: var(--paper);
+}
+
+.inn-table-nav-item.active {
+    background: var(--ink);
+    border-left-color: var(--ink);
+}
+.inn-table-nav-item.active .tn-name { color: #fff; }
+
+.inn-table-nav-item .tn-name {
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.inn-table-nav-item.active .tn-name { color: #fff; font-weight: 800; }
+
+.inn-table-nav-item .tn-count {
+    font-family: var(--ds-font);
+    font-size: 0.76em;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    padding: 1px 7px;
+    border-radius: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-table-nav-item.active .tn-count {
+    color: var(--ink);
+    border-color: #fff;
+    background: #fff;
+}
+
+.inn-new-table-btn {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--rule);
+    background: none;
+    border-radius: var(--radius-sm);
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 700;
+    margin-top: 8px;
+    transition: all 0.12s;
+}
+
+.inn-new-table-btn:hover {
+    border-color: var(--ink);
+    color: #fff;
+    background: var(--ink);
+}
+
+.inn-filter-search {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    font-size: 0.86em;
+    margin-bottom: 10px;
+    background: var(--paper);
+    font-family: inherit;
+    color: var(--ink);
+}
+.inn-filter-search::placeholder { color: var(--ds-faint); }
+.inn-filter-search:focus {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+    border-color: var(--ink);
+    background: var(--panel);
+}
+
+/* ─── MAIN ───────────────────────────────────────────────────────────── */
+
+.inn-main {
+    padding: 26px 34px 60px;
+    overflow-y: auto;
+    max-height: calc(100vh - 64px);
+}
+
+.inn-view-toggle {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 0;
+}
+
+.inn-view-toggle button {
+    padding: 9px 4px;
+    margin-right: 18px;
+    border: none;
+    border-bottom: 2.5px solid transparent;
+    background: none;
+    cursor: pointer;
+    font-size: 0.88em;
+    font-weight: 600;
+    color: var(--muted);
+    transform: translateY(1.5px);
+    transition: color 0.12s;
+}
+
+.inn-view-toggle button:hover { color: var(--ink); }
+
+.inn-view-toggle button.active {
+    color: var(--accent-deep);
+    border-bottom-color: var(--accent);
+}
+
+.inn-view-toggle button:disabled {
+    color: var(--ds-faint);
+    cursor: not-allowed;
+}
+
+/* Empty state — matches design.css's .ds-empty: left-aligned, rule above,
+   no emoji-decoration. */
+.inn-empty-state {
+    text-align: left;
+    padding: 20px 0;
+    color: var(--muted);
+    background: none;
+    border: none;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+.inn-empty-state .big {
+    font-family: var(--serif);
+    font-size: 1.1em;
+    font-weight: 800;
+    margin-bottom: 6px;
+    color: var(--ink);
+}
+
+/* ─── OVERVIEW (ALL TABLES) ──────────────────────────────────────────── */
+
+/* 320, not 310 — and the real fix for truncated guest names is in
+   .inn-oc-booking-row below, not here. Widening the card until the name fit
+   cost a whole column on a 1024 tablet (one card per row) to solve a problem
+   the row can solve itself by wrapping. This lands 3 cards on a 1680 monitor
+   and 2 on a landscape tablet. */
+.inn-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+}
+
+.inn-overview-card {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 0;
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+    transition: border-color 0.15s;
+}
+
+.inn-overview-card:hover {
+    border-color: var(--ds-ink-soft);
+}
+
+.inn-overview-card.has-today {
+    border-color: var(--accent);
+    border-width: 2px;
+}
+
+.inn-oc-header {
+    padding: 15px 18px 13px;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.inn-oc-title {
+    font-family: var(--serif);
+    font-size: 1.08em;
+    font-weight: 700;
+    margin-right: auto;
+    color: var(--ink);
+}
+
+.inn-oc-today-badge {
+    font-family: var(--ds-font);
+    font-size: 0.68em;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: white;
+    background: var(--accent);
+    padding: 3px 9px;
+    border-radius: 0;
+    flex-shrink: 0;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+/* Static square, not a pulse. This badge repeats on every table booked
+   today, so on a busy evening the old version put a dozen independent
+   infinite animations on screen at once — motion competing with itself
+   says nothing, and it never stops to let you read the grid. The red fill
+   is already the signal. */
+.inn-oc-today-badge::before {
+    content: "";
+    width: 5px; height: 5px;
+    border-radius: 0;
+    background: #fff;
+}
+
+.inn-oc-edit-btn {
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    border-radius: var(--radius-sm);
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 0.82em;
+    font-weight: 700;
+    color: var(--ink-soft);
+    flex-shrink: 0;
+    transition: all 0.12s;
+}
+.inn-oc-edit-btn:hover { border-color: var(--ink); color: #fff; background: var(--ink); }
+
+.inn-oc-attrs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 12px 18px 0;
+}
+
+.inn-oc-tag {
+    font-size: 0.72em;
+    font-weight: 500;
+    padding: 2px 9px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 0;
+    color: var(--ink-soft);
+}
+
+.inn-oc-body {
+    padding: 12px 18px 16px;
+}
+
+.inn-oc-stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.84em;
+    color: var(--muted);
+    margin-bottom: 10px;
+    font-weight: 500;
+}
+
+.inn-oc-stat-row b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.inn-oc-upcoming-label {
+    font-size: 0.68em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    margin-bottom: 6px;
+    margin-top: 12px;
+}
+
+.inn-oc-upcoming-label:first-of-type { margin-top: 0; }
+
+.inn-oc-today-label { color: var(--ink); }
+
+/* Wraps rather than crushes. Time (fixed 92px) + name + status badge do not
+   fit on one line in a ~340px card, and the name was the part that gave —
+   ellipsed down to "Jan Nov…", which defeats the point of the row. Now the
+   badge drops to its own line when the three cannot share one, and the name
+   keeps everything the time leaves it. */
+.inn-oc-booking-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    padding: 7px 8px;
+    margin: 0 -8px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 0.86em;
+    border-radius: var(--radius-sm);
+}
+
+.inn-oc-booking-row:first-of-type { border-top: none; }
+
+.inn-oc-booking-today { background: #f4f2ee; }
+.inn-oc-booking-today .inn-oc-booking-time { color: var(--ink); }
+
+.inn-oc-booking-time {
+    font-family: var(--ds-font);
+    color: var(--ink-soft);
+    font-weight: 700;
+    flex-shrink: 0;
+    width: 92px;
+    line-height: 1.3;
+    font-size: 0.95em;
+    font-variant-numeric: tabular-nums;
+}
+.inn-oc-booking-time small {
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.82em;
+}
+
+.inn-oc-booking-who {
+    flex: 1 1 120px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+}
+
+/* Badge — rectangular, outlined (border = currentColor), white background;
+   NEZAPLACENO reads red, ZAPLACENO reads green (matches design.css's
+   .ds-badge --paid/--unpaid rules exactly, own class name kept). */
+.inn-status-pill {
+    font-size: 10px;
+    font-family: var(--ds-font);
+    text-transform: uppercase;
+    padding: 4px 9px;
+    border-radius: 0;
+    border: 1px solid currentColor;
+    background: #fff;
+    flex-shrink: 0;
+    font-weight: 800;
+    letter-spacing: .06em;
+    line-height: 1;
+}
+.inn-status-pill.unpaid { color: var(--warn); }
+.inn-status-pill.paid { color: var(--ok); }
+.inn-status-pill.noorder { color: var(--muted); border-color: var(--line); }
+
+button.inn-status-pill {
+    border: 1px solid currentColor;
+    cursor: pointer;
+    font-family: var(--ds-font);
+    transition: background 0.12s, color 0.12s;
+}
+button.inn-status-pill.unpaid:hover { background: var(--warn); color: #fff; }
+
+/* ─── ONLINE PAYMENTS (GoPay) / RECEIPTS ────────────────────────────────── */
+
+.inn-btn.small {
+    padding: 6px 12px;
+    font-size: 0.78em;
+}
+/* Compound selector so this wins over the later .inn-btn base rule
+   regardless of source order (both are single-class selectors otherwise). */
+.inn-btn.inn-payonline-btn {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.inn-btn.inn-payonline-btn:hover { background: var(--accent); color: #fff; }
+
+.inn-status-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.inn-receipt-link {
+    font-size: 0.85em;
+    text-decoration: none;
+    opacity: 0.75;
+}
+.inn-receipt-link:hover { opacity: 1; }
+
+.inn-payonline-note {
+    font-size: 0.85em;
+    color: var(--muted);
+    margin: 6px 0;
+}
+.inn-payonline-waiting {
+    font-size: 0.82em;
+    color: var(--muted);
+    margin-top: 10px;
+}
+.inn-payonline-qr {
+    display: flex;
+    justify-content: center;
+    margin: 12px 0;
+}
+.inn-payonline-qr svg { max-width: 220px; width: 100%; height: auto; }
+.inn-payonline-paid { font-size: 1.2em; color: var(--ok); font-weight: 700; margin: 6px 0 14px; }
+.inn-payonline-failed { color: var(--danger); }
+
+.inn-toast.with-link { pointer-events: auto; }
+.inn-toast a { color: inherit; text-decoration: underline; font-weight: 700; }
+
+.inn-oc-empty-note {
+    font-size: 0.85em;
+    color: var(--muted);
+    font-style: italic;
+    padding: 4px 0;
+}
+
+/* ─── TABLE DETAIL VIEW ──────────────────────────────────────────────── */
+
+.inn-detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.inn-detail-title-block h2 {
+    font-family: var(--serif);
+    font-size: 1.55em;
+    font-weight: 800;
+    margin: 0 0 4px;
+    letter-spacing: -0.02em;
+}
+
+.inn-detail-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* ─── BUTTONS — visually aligned with design.css's .ds-btn (padding /
+   radius / weight / states match exactly) so the admin reads as one
+   system with the rest of the app, without renaming inner.js's classes. ── */
+/* .inn-btn is a parallel reimplementation of .ds-btn that exists only so
+   inner.js's class names keep working. It was matching .ds-btn's old look but
+   not its behaviour, so admin buttons sat out the system's hover gesture
+   entirely. The ink wipe is defined here in the same terms design.css uses,
+   which is what makes the admin read as the same product as the customer
+   side rather than a lookalike. */
+.inn-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 13px 22px;
+    border-radius: var(--ds-radius);
+    border: 1px solid var(--rule);
+    background-color: var(--panel);
+    background-image: linear-gradient(var(--ds-ink) 0 100%);
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    background-size: 100% 0;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--ink);
+    transition: background-size var(--ds-dur) var(--ds-ease),
+                background-color var(--ds-dur-fast) ease,
+                border-color var(--ds-dur-fast) ease,
+                color var(--ds-dur-fast) ease,
+                opacity var(--ds-dur-fast) ease;
+}
+@media (hover: hover) {
+    .inn-btn:hover { background-size: 100% 100%; color: #fff; }
+}
+.inn-btn:active { background-size: 100% 100%; color: #fff; }
+.inn-btn:focus-visible { outline: 2px solid var(--ds-ink); outline-offset: 2px; }
+
+.inn-btn.primary {
+    background-color: var(--accent);
+    background-image: linear-gradient(var(--accent-deep) 0 100%);
+    border-color: var(--accent);
+    color: #fff;
+}
+@media (hover: hover) { .inn-btn.primary:hover { border-color: var(--accent-deep); } }
+.inn-btn.primary:active { border-color: var(--accent-deep); }
+
+.inn-btn.danger {
+    color: #fff;
+    border-color: var(--danger);
+    background-color: var(--danger);
+    background-image: linear-gradient(var(--accent-deep) 0 100%);
+}
+@media (hover: hover) { .inn-btn.danger:hover { border-color: var(--accent-deep); } }
+.inn-btn.danger:active { border-color: var(--accent-deep); }
+
+.inn-btn:disabled { opacity: .5; cursor: not-allowed; pointer-events: none; }
+
+.inn-detail-panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-bottom: 22px;
+}
+
+@media (max-width: 1000px) {
+    .inn-detail-panels { grid-template-columns: 1fr; }
+}
+
+.inn-panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    box-shadow: var(--shadow-sm);
+}
+
+.inn-panel h3 {
+    font-family: var(--ds-font);
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin: 0 0 14px;
+    font-weight: 700;
+}
+
+.inn-field-group { margin-bottom: 14px; }
+.inn-field-group:last-child { margin-bottom: 0; }
+
+.inn-field-group label {
+    display: block;
+    font-size: 0.82em;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--ink);
+}
+
+.inn-field-group input[type="text"],
+.inn-field-group input[type="password"],
+.inn-field-group input[type="number"],
+.inn-field-group input[type="file"],
+.inn-field-group textarea,
+.inn-field-group select {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.92em;
+    background: var(--panel);
+    color: var(--ink);
+    transition: border-color 0.12s;
+}
+.inn-field-group input::placeholder,
+.inn-field-group textarea::placeholder { color: var(--ds-faint); }
+.inn-field-group input[type="text"]:focus,
+.inn-field-group input[type="password"]:focus,
+.inn-field-group input[type="number"]:focus,
+.inn-field-group textarea:focus,
+.inn-field-group select:focus {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+    border-color: var(--ink);
+}
+
+.inn-field-group textarea { resize: vertical; min-height: 60px; }
+
+.inn-attr-edit-row {
+    display: flex;
+    gap: 7px;
+    margin-bottom: 10px;
+}
+.inn-attr-edit-row input {
+    flex: 1;
+    padding: 8px 11px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 0.88em;
+    background: var(--paper);
+    color: var(--ink);
+}
+.inn-attr-add-btn-small {
+    padding: 8px 14px;
+    border: 1px solid var(--ink);
+    background: var(--ink);
+    color: #fff;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: 600;
+}
+.inn-attr-add-btn-small:hover { background: #000; border-color: #000; }
+
+.inn-attr-tag-edit-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.inn-attr-tag-removable {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 6px 4px 10px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 0;
+    font-size: 0.8em;
+    font-weight: 500;
+}
+
+.inn-attr-tag-removable button {
+    border: none;
+    background: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 1.05em;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+/* Bookings table */
+.inn-bookings-panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    box-shadow: var(--shadow-sm);
+}
+
+.inn-bookings-table-wrap { overflow-x: auto; }
+
+.inn-bookings-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88em;
+}
+
+.inn-bookings-table th {
+    text-align: left;
+    font-family: var(--ds-font);
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 700;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--line);
+}
+
+.inn-bookings-table td {
+    padding: 11px 10px;
+    border-bottom: 1px solid var(--line-soft);
+    vertical-align: top;
+}
+
+.inn-bookings-table tbody tr:hover { background: var(--paper); }
+.inn-bookings-table tr:last-child td { border-bottom: none; }
+
+.inn-bk-date {
+    font-weight: 700;
+    color: var(--ink);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-bk-time {
+    white-space: nowrap;
+    color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-bk-content-input {
+    width: 100%;
+    border: 1px solid transparent;
+    background: none;
+    font-family: inherit;
+    font-size: 0.95em;
+    padding: 4px 6px;
+    border-radius: 0;
+    color: var(--ink);
+}
+.inn-bk-content-input:hover, .inn-bk-content-input:focus {
+    border-color: var(--rule);
+    background: var(--panel);
+    outline: none;
+}
+
+.inn-perm-badge {
+    font-size: 0.66em;
+    font-family: var(--ds-font);
+    background: #fff;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 2px 7px;
+    border-radius: 0;
+    margin-left: 6px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.inn-bk-delete-btn {
+    border: none;
+    background: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 1.1em;
+    padding: 2px 6px;
+    border-radius: 0;
+}
+.inn-bk-delete-btn:hover { background: var(--danger); color: #fff; }
+
+.inn-future-note {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    font-size: 0.82em;
+    color: var(--muted);
+    background: var(--paper);
+}
+.inn-future-note b { color: var(--ink); }
+
+/* Toast — matches design.css's .ds-toast look */
+.inn-toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--ink);
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: var(--ds-radius);
+    font-size: 14px;
+    font-weight: 700;
+    box-shadow: none;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: all 0.22s ease;
+    pointer-events: none;
+    z-index: 500;
+}
+.inn-toast.show { opacity: 1; transform: translateY(0); }
+.inn-toast.error { background: var(--danger); }
+
+/* Modal — square, opening edge carries a 2px black rule (matches
+   design.css's .ds-sheet treatment); open/close mechanics unchanged —
+   inner.js toggles the "active" class it always has. */
+.inn-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(17, 17, 17, .5);
+    z-index: 800;
+    align-items: center;
+    justify-content: center;
+}
+.inn-modal-overlay.active { display: flex; }
+.inn-modal-box {
+    background: var(--panel);
+    border-radius: var(--radius-lg);
+    border-top: 2px solid var(--rule);
+    padding: 24px 26px;
+    width: 380px;
+    max-width: 92vw;
+    box-shadow: var(--shadow-lg);
+}
+.inn-modal-box h3 {
+    font-family: var(--serif);
+    font-weight: 800;
+    letter-spacing: -.01em;
+    margin: 0 0 16px;
+    color: var(--ink);
+}
+.inn-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+}
+
+/* Login gate — warm-minimal, same family as the Rezervace page instead of
+   the old dark gradient. */
+.inn-gate-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--paper);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.inn-gate-box {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-top: 2px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 32px 34px;
+    width: 380px;
+    max-width: 90vw;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+}
+.inn-gate-box h2 {
+    font-family: var(--serif);
+    font-weight: 800;
+    letter-spacing: -.02em;
+    margin: 0 0 8px;
+    color: var(--ink);
+}
+.inn-gate-box p {
+    color: var(--muted);
+    font-size: 0.9em;
+    margin: 0 0 18px;
+}
+
+/* ─── MENU VIEW ──────────────────────────────────────────────────────── */
+
+.inn-menu-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.inn-menu-header h2 {
+    font-family: var(--serif);
+    font-size: 1.5em;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    margin: 0;
+    color: var(--ink);
+}
+
+.inn-menu-categories {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.inn-menu-category {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+
+.inn-menu-cat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+}
+
+.inn-menu-cat-header h3 {
+    margin: 0;
+    font-family: var(--serif);
+    font-weight: 800;
+    font-size: 1.05em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink);
+}
+
+.inn-menu-cat-count {
+    font-family: var(--ds-font);
+    font-size: 0.72em;
+    color: var(--muted);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 0;
+    padding: 2px 9px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-menu-dishes-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 14px;
+    padding: 18px 20px;
+}
+
+.inn-dish-card {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.15s;
+    cursor: pointer;
+}
+
+.inn-dish-card:hover {
+    border-color: var(--accent);
+}
+
+.inn-dish-img {
+    width: 100%;
+    height: 130px;
+    object-fit: cover;
+    display: block;
+    background: #f2f2f2;
+}
+
+.inn-dish-img-placeholder {
+    width: 100%;
+    height: 130px;
+    background: #f2f2f2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.2em;
+    color: var(--muted);
+}
+
+.inn-dish-body {
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+}
+
+.inn-dish-name { font-weight: 700; font-size: 0.95em; line-height: 1.3; color: var(--ink); }
+.inn-dish-info { font-size: 0.78em; color: var(--muted); line-height: 1.4; flex: 1; }
+
+.inn-dish-price {
+    font-size: 1em;
+    font-weight: 700;
+    color: var(--accent-deep);
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-dish-add-card {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 140px;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.88em;
+    font-weight: 700;
+    background: none;
+    transition: all 0.15s;
+    padding: 20px;
+    text-align: center;
+}
+
+.inn-dish-add-card:hover {
+    border-color: var(--accent);
+    color: #fff;
+    background: var(--accent);
+}
+
+.inn-dish-add-card .plus { font-size: 2em; line-height: 1; font-weight: 400; }
+
+/* Image preview in modal */
+.inn-dish-img-preview {
+    margin-top: 8px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    max-height: 120px;
+}
+
+.inn-dish-img-preview img {
+    width: 100%;
+    max-height: 120px;
+    object-fit: cover;
+    display: block;
+    border-radius: var(--radius-sm);
+}
+
+.inn-menu-empty {
+    padding: 20px;
+    color: var(--muted);
+    font-style: italic;
+    font-size: 0.88em;
+}
+
+/* ─── SETTINGS VIEW (Nastavení) ──────────────────────────────────────── */
+/* Hidden until switchView('settings') shows it via JS — kept in CSS
+   (not an inline style="" attribute) per the CSP/no-inline-styles rule. */
+#settingsView { display: none; }
+
+.inn-settings-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.inn-settings-section-title {
+    font-family: var(--ds-font);
+    font-size: 0.72em;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin: 0 0 14px;
+    font-weight: 700;
+}
+
+.inn-settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+}
+
+@media (max-width: 760px) {
+    .inn-settings-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Hours tables (reservations Po-Ne / delivery Po-Ne) — one row per weekday */
+.inn-hours-table {
+    display: flex;
+    flex-direction: column;
+}
+
+.inn-hours-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 12px 2px;
+    border-top: 1px solid var(--line);
+}
+.inn-hours-row:first-child { border-top: none; }
+
+.inn-hours-row__day {
+    flex: 0 0 100px;
+    font-weight: 700;
+    font-size: 0.9em;
+    color: var(--ink);
+}
+
+.inn-hours-row__open {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    color: var(--ink-soft);
+    cursor: pointer;
+}
+
+.inn-hours-row__range {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82em;
+    color: var(--muted);
+}
+
+.inn-hours-row__range select,
+.inn-hours-row__range input[type="time"] {
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+
+/* Closed days list */
+.inn-closed-day-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 2px;
+    border-top: 1px solid var(--line);
+}
+.inn-closed-day-row:first-child { border-top: none; }
+
+.inn-closed-day-row__date {
+    flex: 0 0 110px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent-deep);
+}
+
+.inn-closed-day-row__note {
+    flex: 1;
+    color: var(--ink-soft);
+    font-size: 0.9em;
+}
+
+.inn-closed-day-add {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+}
+
+.inn-closed-day-add input[type="date"] {
+    flex: 0 0 170px;
+    padding: 10px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+
+.inn-closed-day-add input[type="text"] {
+    flex: 1;
+    min-width: 160px;
+    padding: 10px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+
+/* Pause switches — rectangular (Swiss, no pills), danger-colored + a hint
+   line once active so an admin can't miss that they've turned something off
+   for real customers. */
+.inn-switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 2px;
+    border-top: 1px solid var(--line);
+}
+.inn-switch-row:first-child { border-top: none; }
+
+.inn-switch-row__body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.inn-switch-row__label {
+    font-weight: 700;
+    color: var(--ink);
+}
+
+.inn-switch-row__hint {
+    display: none;
+    font-size: 0.78em;
+    color: var(--danger);
+}
+
+.inn-switch-row.is-active .inn-switch-row__label { color: var(--danger); }
+.inn-switch-row.is-active .inn-switch-row__hint { display: block; }
+
+.inn-switch {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.inn-switch-input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+}
+
+.inn-switch-track {
+    position: relative;
+    display: inline-block;
+    width: 46px;
+    height: 26px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    background: var(--panel);
+    transition: background-color .15s ease, border-color .15s ease;
+}
+.inn-switch-track::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: var(--ink);
+    border-radius: var(--radius-lg);
+    transition: transform .15s ease, background-color .15s ease;
+}
+.inn-switch-input:checked + .inn-switch-track {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+}
+.inn-switch-input:checked + .inn-switch-track::after {
+    transform: translateX(20px);
+    background: var(--danger);
+}
+.inn-switch-input:focus-visible + .inn-switch-track {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+}
+
+.inn-settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 4px;
+}
+
+/* ─── PSČ WHITELIST CHIPS (Rozvoz — pravidla, go-live Task 2) ──────────── */
+/* Rectangular chips (Swiss/monochrome — no pills), same "rule, not card"
+   language as the rest of the design system. Empty-list hint uses a class
+   (not an inline style="") per the no-inline-styles/CSP rule. */
+.inn-settings-hint {
+    font-size: 0.8em;
+    color: var(--muted);
+    margin: -6px 0 10px;
+}
+
+.inn-psc-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+    min-height: 1.4em;
+}
+
+.inn-psc-empty {
+    font-size: 0.85em;
+    color: var(--muted);
+}
+
+.inn-psc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-sm);
+    font-family: var(--mono, monospace);
+    font-size: 0.88em;
+    font-weight: 700;
+    color: var(--ink);
+    background: var(--panel);
+}
+
+.inn-psc-chip__remove {
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 1.1em;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 4px;
+}
+.inn-psc-chip__remove:hover { color: var(--danger); }
+
+.inn-psc-add {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.inn-psc-add input[type="text"] {
+    flex: 0 0 160px;
+    padding: 10px 12px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+
+/* ─── SOLD-OUT (go-live Task 3, spec §5) ────────────────────────────────
+   Faded card + a footer row holding either the admin's clickable toggle
+   pill or (for non-admin viewers) a plain read-only badge — both reuse
+   .inn-status-pill's existing red/green "unpaid/paid" color language
+   instead of inventing a new component. ── */
+.inn-dish-card.is-soldout {
+    opacity: 0.55;
+}
+.inn-dish-footer {
+    padding: 0 12px 12px;
+    display: flex;
+    justify-content: flex-end;
+}
+button.inn-status-pill.paid:hover { background: var(--ok); color: #fff; }
+
+/* ─── DAILY MENU (Polední menu, go-live Task 3) — quick-entry rows ──────
+   Same "rule, not card" row language as PSČ chips/closed-days list above:
+   one row per item, name/price/DPH inline, remove button on the right. ── */
+.inn-daily-item-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+}
+.inn-daily-item-row:first-child { border-top: none; }
+.inn-daily-item-name {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+.inn-daily-item-price {
+    width: 100px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+.inn-daily-item-vat {
+    width: 84px;
+    padding: 8px 6px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+
+/* ─── COMBO MENUS ("Zvýhodněná menu") ────────────────────────────────────
+   go-live feature (spec: docs/superpowers/specs/2026-07-22-combo-menus-
+   design.md, plan Task 2). The section/card/modal chrome deliberately
+   REUSES the MENU VIEW classes above (.inn-menu-category, .inn-dish-card,
+   .inn-dish-*, .inn-status-pill, .inn-daily-item-row) so a combo reads as
+   "one more kind of menu row", not a bolted-on sub-app — everything in
+   this block is either a small combo-only addition (.inn-combo-*) or the
+   slot/swap builder that has no equivalent elsewhere in the page
+   (.inn-slot-*, .inn-swap-*). ── */
+
+/* The combo section sits above the regular categories (rendered first in
+   renderMenuView()) — a slightly heavier top rule than a plain category
+   sets it apart as "featured" without introducing a whole new color. */
+.inn-combo-section {
+    border-top: 2px solid var(--accent);
+}
+
+/* Header gains the "+ Přidat menu" button next to the category count —
+   category headers elsewhere don't have inline actions, so this is
+   combo-only; kept flex+wrap so it doesn't overflow on narrow widths.
+   (Plain class instead of a :has() selector — keeps this working in any
+   browser regardless of :has() support.) */
+.inn-combo-section .inn-menu-cat-header {
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+/* Missing-dish warning badge — a combo whose stored dishId no longer
+   exists in the live menu (dish deleted after the combo was built) must
+   stay clearly visible in the admin list rather than silently mis-pricing
+   or breaking at order time (plan Task 2: "clearly visible warning
+   badge"). Reuses the --warn color already used by inn-status-pill.unpaid. */
+.inn-combo-warning {
+    margin-top: 4px;
+    font-size: 0.78em;
+    font-weight: 700;
+    color: var(--warn);
+}
+
+/* Combo card footer holds three controls (toggle + Upravit + Smazat)
+   instead of the single toggle a dish footer has — wrap on narrow cards
+   instead of overflowing. */
+.inn-combo-footer {
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* ── Slot builder (inside the Add/Edit combo modal) ──────────────────── */
+
+.inn-slot-row {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    background: var(--paper);
+}
+.inn-slot-row-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.inn-slot-dish-select {
+    flex: 1;
+    min-width: 180px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+.inn-slot-removable-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.85em;
+    color: var(--ink);
+    white-space: nowrap;
+}
+.inn-slot-removevalue-input {
+    width: 150px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: var(--ds-radius);
+    font-family: inherit;
+    font-size: 0.9em;
+    background: var(--panel);
+    color: var(--ink);
+}
+.inn-slot-removevalue-input:disabled {
+    opacity: 0.5;
+    background: var(--line);
+}
+
+/* Swap picker — a wrapping pill-list of checkboxes, one per candidate
+   dish, so it stays usable even with a large menu (scrolls internally
+   rather than pushing the modal ever taller). */
+.inn-swap-wrap {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+}
+.inn-swap-label {
+    font-size: 0.78em;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+.inn-swap-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 130px;
+    overflow-y: auto;
+}
+.inn-swap-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.8em;
+    padding: 4px 9px;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+}
+.inn-swap-empty {
+    font-size: 0.8em;
+    color: var(--muted);
+    font-style: italic;
+}
+
+/* ── Extras builder — reuses .inn-daily-item-row's row layout wholesale.
+   BUT: inside the combo modal the rows live in an .inn-field-group, whose
+   generic `input { width: 100% }` rule out-specifies .inn-daily-item-name/
+   -price (seen live: name collapsed to ~30px, price ballooned to fill the
+   row). The id-scoped selectors below win the specificity contest and
+   restore the intended flex layout. ── */
+#comboExtraRows .inn-daily-item-name {
+    width: auto;
+    flex: 1 1 0;
+}
+#comboExtraRows .inn-daily-item-price {
+    width: 100px;
+    flex: 0 0 100px;
+}
+.inn-combo-extras-empty {
+    color: var(--muted);
+    font-size: 0.85em;
+    font-style: italic;
+    margin: 4px 0;
+}
+
+/* ============================================================================
+   PAGE-LEVEL CHROME — moved here verbatim from an inline <style> block in
+   inner.html. It sat there for file-ownership reasons during an earlier
+   track; that constraint is gone and keeping it there cost real things:
+   minify.js only minifies .css/.js REQUESTS, so ~240 lines of CSS shipped
+   unminified inside the HTML on every load, and because the block came
+   after inner.css it silently overrode the RESPONSIVE section below —
+   .inn-sidebar kept width:300px and flex-direction:column on a phone, so
+   the mobile collapse never actually ran. Sitting above RESPONSIVE now,
+   it does.
+   ============================================================================ */
+
+/* ── Left-side view nav — quieted grid of square tiles (icon on top,
+     label below), replacing the old horizontal .inn-view-toggle bar
+     that used to sit above the main content. Monochrome per the
+     redesign: active tile = ink fill + white text, inactive = surface
+     + hairline border, no per-tile colors. ── */
+.inn-nav-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding-bottom: 16px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--ds-border);
+}
+.inn-nav-tab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    /* Was aspect-ratio: 1/1. Nine square tiles in two columns pushed the
+       stats and the table list — the things staff actually read — clean off
+       the bottom of a 1100px screen, so navigation was outranking content in
+       a tool. A 74px floor keeps the targets big enough to hit during a rush
+       (the reason they were enlarged) while giving the sidebar its lower half
+       back. */
+    min-height: 74px;
+    width: 100%;
+    padding: 10px 6px;
+    border-radius: var(--ds-radius);
+    border: 1px solid var(--ds-rule);
+    cursor: pointer;
+    box-sizing: border-box;
+    background: var(--ds-surface);
+    color: var(--ds-ink-soft);
+    font-size: 0.82em;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .02em;
+    line-height: 1.2;
+    text-align: center;
+    box-shadow: var(--ds-shadow);
+    transition: background-color 0.12s, border-color 0.12s, color 0.12s, transform 0.08s;
+}
+/* ── Nav glyphs ───────────────────────────────────────────────────────────
+   These nine tiles used to carry emoji (📋 🔍 🧑‍🍳 🍽 📊 👤 ⚙ 🗺 📆) under a
+   grayscale() filter, which is the tell: emoji render in each OS's own house
+   style, at each vendor's own weight, and no filter makes them belong to a
+   flat black-rule system. They are now drawn marks — one geometric family,
+   1.75px stroke, square caps, matching the rules and chair bars the rest of
+   the app is built from.
+
+   Delivered as a mask over `currentColor` rather than as an image element:
+   the glyph then inherits the tile's colour for free, so it reverses to white
+   on the inked active tile and follows the hover state with no extra rules
+   and no second asset. */
+.inn-nav-tab .icon {
+    width: 26px;
+    height: 26px;
+    background-color: currentColor;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    opacity: .85;
+    transition: opacity var(--ds-dur-fast) ease;
+}
+.inn-nav-tab:hover .icon,
+.inn-nav-tab.active .icon { opacity: 1; }
+
+.inn-nav-tab .icon[data-glyph="overview"] {
+    -webkit-mask-image: var(--glyph-overview); mask-image: var(--glyph-overview);
+}
+.inn-nav-tab .icon[data-glyph="detail"] {
+    -webkit-mask-image: var(--glyph-detail); mask-image: var(--glyph-detail);
+}
+.inn-nav-tab .icon[data-glyph="waiter"] {
+    -webkit-mask-image: var(--glyph-waiter); mask-image: var(--glyph-waiter);
+}
+.inn-nav-tab .icon[data-glyph="menu"] {
+    -webkit-mask-image: var(--glyph-menu); mask-image: var(--glyph-menu);
+}
+.inn-nav-tab .icon[data-glyph="sales"] {
+    -webkit-mask-image: var(--glyph-sales); mask-image: var(--glyph-sales);
+}
+.inn-nav-tab .icon[data-glyph="users"] {
+    -webkit-mask-image: var(--glyph-users); mask-image: var(--glyph-users);
+}
+.inn-nav-tab .icon[data-glyph="settings"] {
+    -webkit-mask-image: var(--glyph-settings); mask-image: var(--glyph-settings);
+}
+.inn-nav-tab .icon[data-glyph="layout"] {
+    -webkit-mask-image: var(--glyph-layout); mask-image: var(--glyph-layout);
+}
+.inn-nav-tab .icon[data-glyph="daily"] {
+    -webkit-mask-image: var(--glyph-daily); mask-image: var(--glyph-daily);
+}
+.inn-nav-tab:hover {
+    border-color: var(--ds-ink);
+    color: var(--ds-ink);
+}
+.inn-nav-tab:active {
+    transform: scale(0.96);
+}
+.inn-nav-tab.active {
+    background: var(--ds-ink);
+    border-color: var(--ds-ink);
+    color: #fff;
+}
+/* Red left-edge indicator on the active tile (spec §4 Admin). The tile is
+   already inked black and reversed white, which is a complete "you are here"
+   on its own — this stripe is the confirmation, so it stays narrow. */
+.inn-nav-tab.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--ds-accent);
+}
+.inn-nav-tab .icon,
+.inn-nav-tab span { pointer-events: none; }
+.inn-nav-tab.active .icon {
+    filter: grayscale(1) brightness(1.6) contrast(1.15);
+    opacity: 1;
+}
+.inn-nav-tab:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.inn-nav-tab:disabled:hover {
+    border-color: var(--ds-rule);
+    color: var(--ds-ink-soft);
+}
+
+/* Sidebar now stacks: nav tile grid on top, then the contextual
+   "Přehled" stats + table list below, scrollable if needed.
+   Widened + tiles enlarged so staff can hit them fast during a rush. */
+.inn-sidebar {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    width: 300px;
+    min-width: 300px;
+    flex-shrink: 0;
+}
+.inn-sidebar-lower {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 14px;
+    overflow-y: auto;
+}
+
+/* Landscape tablet — the narrow end of what this tool is actually used on
+   (wide tablet or monitor), so this is a real target, not a fallback. At
+   1024 the 272px sidebar plus 34px main padding left the content column
+   under 690px and the booking cards started truncating guest names two to a
+   row. Reclaiming ~70px of chrome puts a third card back within reach and
+   stops the truncation. */
+@media (max-width: 1120px) {
+    .inn-sidebar {
+        width: 228px;
+        min-width: 228px;
+        padding: 18px 12px;
+    }
+    .inn-main { padding: 20px 20px 48px; }
+    .inn-nav-tab {
+        font-size: 0.68em;
+        min-height: 64px;
+        gap: 4px;
+    }
+    /* The icon is a fixed-size mask box now, not a glyph — font-size stopped
+       controlling it when the emoji went away. */
+    .inn-nav-tab .icon { width: 20px; height: 20px; }
+    .inn-overview-grid { gap: 12px; }
+}
+
+/* ── Floorplan (docs/superpowers/specs/2026-07-27-floorplan-table-
+     picking-design.md §6.3/§6.4) — page-specific chrome around the
+     shared FloorPlan.render() canvas: the overview's read-only mini-plan
+     wrapper + card highlight, and the full Rozložení editor's toolbar /
+     two-column body / side panel / tray / resize handle. This lives here
+     (inner.html's own page-level <style>, same as the nav-tab rules
+     above) rather than in inner.css or floorplan.css — neither of those
+     files is owned by this track (see the implementation plan's file
+     ownership table), and floorplan.css in particular is the shared
+     module's own contract, not a place for this page's editor chrome.
+     --ds-* custom properties only, same as the rest of this page. ── */
+/* The overview's plan is a glance — "where is everything, what's busy" — not
+   a working canvas, and the table cards below it are the actual job. At the
+   shared 440px cap it took the whole first screen before a single card
+   appeared, so it gets a tighter one. The Rozložení editor, where you really
+   are drawing, keeps the full height. */
+.inn-overview-floorplan {
+    --fp-canvas-max-h: 300px;
+    margin-bottom: 20px;
+}
+/* Flashes the card's own rule rather than painting a zero-offset colour halo
+   around it: this system has no shadows, so a 3px glow read as a stray
+   artefact rather than as emphasis. */
+.inn-oc-highlight {
+    animation: inn-oc-highlight-pulse 1.6s var(--ds-ease);
+}
+@keyframes inn-oc-highlight-pulse {
+    0%, 35% { border-color: var(--ds-accent); }
+    100% { border-color: var(--rule); }
+}
+
+.inn-layout-unsaved-badge {
+    display: inline-block;
+    margin-left: 10px;
+    padding: 3px 10px;
+    border-radius: var(--ds-radius, 0);
+    background: var(--danger);
+    color: #fff;
+    font-size: 0.55em;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    vertical-align: middle;
+}
+.inn-layout-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 16px;
+}
+.inn-layout-toolbar-spacer {
+    flex: 1;
+}
+.inn-layout-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+.inn-layout-canvas-col {
+    flex: 1 1 480px;
+    min-width: 320px;
+}
+.inn-layout-tray {
+    margin-top: 18px;
+}
+.inn-layout-side-panel {
+    flex: 0 0 280px;
+    width: 280px;
+    position: sticky;
+    top: 12px;
+}
+.inn-layout-coord-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+/* 1120, not 900. .inn-layout-body wraps when the canvas column's 480px basis
+   plus this panel's 280px no longer fit — which happens at 1024, the narrow
+   end of the widths this tool is actually used at. Between 900 and 1120 the
+   panel therefore wrapped onto its own row and stayed 280px wide, marooned
+   beside ~400px of empty space, with a position:sticky that had nothing left
+   to stick to. Below 1120 it now takes the full row it already occupies. */
+@media (max-width: 1120px) {
+    .inn-layout-side-panel {
+        flex: 1 1 100%;
+        width: 100%;
+        position: static;
+    }
+    /* Two coordinate fields per row is a 280px-column shape; across a full
+       row they can spread out instead. */
+    .inn-layout-coord-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+}
+/* Bottom-right resize handle injected onto a placed table element by
+     inner.js's attachTableResizeHandle() — plain inline-positioned
+     square, deliberately not relying on any class floorplan.css might
+     also define, since this track doesn't own that file. right:0/
+     bottom:0 (not a negative inset) because floorplan.css's .fp-table
+     sets overflow:hidden — anything positioned outside its own box
+     would be clipped and impossible to grab. */
+.inn-layout-resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 14px;
+    height: 14px;
+    background: var(--ds-ink, #1a1a1a);
+    border: 1px solid #fff;
+    cursor: nwse-resize;
+    touch-action: none;
+    z-index: 5;
+}
+
+/* Room shape editing (docs/superpowers/specs/2026-07-28-room-shape-
+     editing-design.md §5) — this is editor CHROME around the corner
+     handles/edge "+" affordances, not the handles/affordances
+     themselves: those carry the `.fp-corner`/`.fp-edge-add`/
+     `.fp-table--outside` classes, which are floorplan.css's contract to
+     style (same file-ownership split as `.inn-layout-resize-handle`
+     above — this track doesn't touch floorplan.css). The empty-room
+     gate banner (§5.1) and the outside-walls warning line (§5.3) are
+     this page's own chrome, same as everything else in this block. */
+.inn-layout-gate {
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--danger);
+    border-radius: var(--ds-radius, 0);
+    background: var(--danger-soft);
+}
+.inn-layout-gate__msg {
+    margin: 0 0 10px;
+    font-size: 0.88em;
+    line-height: 1.4;
+}
+.inn-layout-outside-warning {
+    margin: 10px 0 0;
+    padding: 8px 12px;
+    border: 1px solid var(--danger);
+    border-radius: var(--ds-radius, 0);
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 0.85em;
+}
+
+/* ─── RESPONSIVE ─────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+    .inn-layout { grid-template-columns: 1fr; }
+
+    /* The sidebar becomes a band across the top. It stays a column — the old
+       flex-direction:row put the nav grid, the stats and the table list side
+       by side in a 390px-wide strip — and it loses max-height:240px, which
+       was clipping the nav after five of its nine tiles with no indication
+       the other four existed. */
+    .inn-sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+        flex-direction: column;
+        /* width/min-width:300px is the desk shape and has to be released
+           explicitly here — left set, it pins a 300px column inside a 390px
+           phone, which is what kept the nav at two cramped columns and the
+           table rows narrower than the screen they had to themselves. */
+        width: auto;
+        min-width: 0;
+        max-height: none;
+        overflow-y: visible;
+        padding: 16px 14px;
+        gap: 16px;
+    }
+    /* Two fixed columns is a 300px-sidebar shape. Across a full phone width
+       the tiles simply fit as many per row as the screen allows. */
+    .inn-nav-tabs {
+        grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+        gap: 6px;
+    }
+    .inn-nav-tab {
+        min-height: 68px;
+        font-size: 0.62em;
+    }
+    .inn-nav-tab .icon { width: 22px; height: 22px; }
+
+    .inn-main {
+        max-height: none;
+        padding: 20px 14px 48px;
+    }
+
+    /* The topbar carries a title plus connection state, user, two buttons and
+       a clock. At 390px that wrapped into a four-line block taller than the
+       first card. It now wraps deliberately, with the title owning its own
+       line and the meta running under it at a size that fits. */
+    .inn-topbar {
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        padding: 12px 14px;
+        position: static;
+    }
+    .inn-topbar h1 { flex: 1 0 100%; font-size: 1.1em; }
+    .inn-topbar-meta {
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        font-size: 0.75em;
+    }
+    .inn-topbar-meta .inn-btn {
+        padding: 9px 12px;
+        font-size: 11px;
+    }
+
+    /* Detail header actions stack rather than squeezing two uppercase
+       buttons onto one 390px line. */
+    .inn-detail-actions { flex: 1 1 100%; }
+    .inn-detail-actions .inn-btn { flex: 1; }
+}

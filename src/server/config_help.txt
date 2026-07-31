@@ -1,0 +1,12 @@
+for server.js all parameters
+
+automatic === automatic detection
+
+for config.js MANUAL_API_URL
+
+null === automatic detection
+
+
+
+
+any other value input will be used.

@@ -1,0 +1,685 @@
+/* ============================================================================
+   reservation.css — page-specific styles for index.html (Rezervace).
+   Builds on design.css tokens/components. Swiss/International Typographic
+   Style pass: poster heading, square day/time tiles, rule-separated table
+   list, square booking sheet. Nothing here is consumed by other pages.
+   ============================================================================ */
+
+/* ── Paper ────────────────────────────────────────────────────────────────
+   The page ground stops being #fff. Every interactive surface here is white
+   with a black rule; against a white page they float in nothing, which is
+   most of why this screen read as a form rather than a place. On a warm
+   paper ground the same untouched components become white cards set on a
+   table — restaurant warmth bought with a value step, not with shadows,
+   rounded corners or a single decorative element, so the flat Swiss system
+   in design.css is preserved exactly.
+
+   Scoped here on purpose: reservation.css is loaded by index.html alone, so
+   the admin/kitchen/driver surfaces keep the pure-white ground they were
+   designed against. --ds-surface stays #fff — that contrast IS the effect.
+   --ds-muted is darkened because #777 on paper measures 4.1:1, under the
+   4.5:1 floor for the 12-13px text it is used on. */
+:root {
+  --ds-bg: #f6f4f0;
+  --ds-muted: #6b6660;
+  --ds-paper-line: #e0dbd2;
+}
+
+html, body {
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+.rsv-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding-bottom: 64px;
+}
+
+/* ── Poster hero ──────────────────────────────────────────────────────── */
+.rsv-hero {
+  padding: 40px 20px 8px;
+}
+.rsv-hero__lede {
+  max-width: 46ch;
+  margin-top: 14px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ds-ink-soft);
+}
+
+.rsv-section {
+  padding: 28px 20px 0;
+}
+
+/* ============================================================================
+   STEP HEADS — replaces four identical 10px tracked-caps eyebrows.
+
+   Booking a table is a genuine sequence: people → date → time → table, and
+   each choice narrows the next. So the head carries a step NUMBER (earned
+   information, not ornament), the step name at a size a person can read,
+   and — on the right — the choice already made, which previously scrolled
+   off the top of the screen and was gone. Three states:
+
+     pending  the step is not reachable yet: hairline rule, outlined number
+     active   the step you are on: red number, rule drawn in black
+     done     a choice is recorded: black number, value shown on the right
+
+   The rule under each head draws in from the left when a step unlocks —
+   the page's only structural motion, and it means something.
+   ============================================================================ */
+.rsv-section__head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 13px;
+  margin-bottom: 16px;
+  border-top: 1px solid var(--ds-paper-line);
+}
+/* The black rule that overlays the hairline track above. */
+.rsv-section__head::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--ds-rule);
+  transform: scaleX(1);
+  transform-origin: left center;
+  transition: transform var(--ds-dur-slow) var(--ds-ease);
+}
+
+.rsv-section__step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.rsv-stepno {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ds-ink);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  transition: background-color var(--ds-dur) var(--ds-ease),
+              color var(--ds-dur) var(--ds-ease),
+              box-shadow var(--ds-dur) var(--ds-ease);
+}
+.rsv-steplabel {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -.012em;
+  color: var(--ds-ink);
+}
+.rsv-stepvalue {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ds-ink);
+}
+.rsv-stepvalue:empty { display: none; }
+
+/* Active — the step awaiting a choice right now. */
+.rsv-section--active .rsv-stepno { background: var(--ds-accent); }
+
+/* Pending — reachable only after an earlier choice. The head recedes; the
+   body keeps full contrast, because the body is the sentence explaining
+   what is missing and it has to stay readable. */
+.rsv-section--pending .rsv-section__head::before { transform: scaleX(0); }
+.rsv-section--pending .rsv-stepno {
+  background: transparent;
+  color: var(--ds-faint);
+  box-shadow: inset 0 0 0 1px var(--ds-paper-line);
+}
+.rsv-section--pending .rsv-steplabel { color: var(--ds-muted); }
+
+/* ── Day strip ────────────────────────────────────────────────────────── */
+
+.rsv-day-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 10px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rsv-day-strip::-webkit-scrollbar { display: none; }
+
+.rsv-day-chip {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 56px;
+  padding: 10px 10px;
+}
+.rsv-day-chip__dow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  opacity: .8;
+}
+.rsv-day-chip__num {
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.rsv-scroll-hint {
+  position: relative;
+  height: 2px;
+  border-radius: 0;
+  background: var(--ds-border);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+/* Driven by the day strip's scroll position, i.e. re-set on every scroll
+   frame while a thumb is dragging. It used to animate `left` and `width`,
+   which forces layout on each of those frames AND lags 100ms behind the
+   finger. Now it is a full-width bar the JS positions with a transform:
+   composited, and it tracks the drag exactly instead of chasing it. */
+.rsv-scroll-hint__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 100%;
+  border-radius: 0;
+  background: var(--ds-ink);
+  transform-origin: left center;
+}
+
+/* ── Time grid ────────────────────────────────────────────────────────────
+   auto-fill rather than a hard repeat(4): at 720px a fixed 4-column grid
+   stretched a single digit across a 176px box, which is what a phone layout
+   blown up to a laptop looks like. The tile now has a sensible width and the
+   grid simply fits more of them per row as the column allows. */
+.rsv-time-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+  gap: 8px;
+}
+/* 44px floor: these tiles are the whole interface on a phone, and 13px type
+   with 12px padding lands at 42. */
+.rsv-time-grid .ds-chip { width: 100%; min-height: 44px; padding: 12px 4px; }
+.rsv-time-grid .ds-empty { grid-column: 1 / -1; }
+
+/* Party size is a row of single digits — it needs a tighter tile than the
+   times do, or eight numerals occupy the same area as twelve clock times. */
+#rsvPartySizeRow { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); }
+
+/* ── Table list — rule-separated rows, single column ─────────────────── */
+.rsv-tables-list {
+  display: flex;
+  flex-direction: column;
+}
+.rsv-tables-list .ds-empty { grid-column: 1 / -1; }
+
+/* The "Nezařazené stoly" divider is the one microlabel left on this page.
+   --ds-faint measures 2.6:1 on paper (and only 2.9:1 on white — it never
+   passed), so it takes the soft ink instead. */
+.rsv-section .ds-microlabel { color: var(--ds-ink-soft); }
+
+/* ── Utility ──────────────────────────────────────────────────────────── */
+.rsv-hidden { display: none !important; }
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+.rsv-footer {
+  max-width: 720px;
+  margin: 32px auto 0;
+  padding: 24px 20px;
+  font-size: 12px;
+  color: var(--ds-muted);
+  text-align: center;
+  border-top: 1px solid var(--ds-border);
+}
+/* go-live Task 5 (spec §7): links to the three legal template pages,
+   underneath the business-identity line filled in by renderer.js. */
+.rsv-footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 12px;
+  margin-top: 8px;
+}
+.rsv-footer__links a { color: var(--ds-ink); text-decoration: underline; }
+
+/* ============================================================================
+   BOOKING SHEET
+   ============================================================================ */
+.rsv-step { display: none; }
+.rsv-step.active { display: block; }
+
+.rsv-sheet-title {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  margin-bottom: 4px;
+}
+.rsv-sheet-summary {
+  font-size: 13px;
+  color: var(--ds-ink-soft);
+  margin-bottom: 18px;
+}
+.rsv-sheet-summary strong { color: var(--ds-ink); font-weight: 700; }
+
+.rsv-field-group {
+  margin-bottom: 16px;
+}
+.rsv-field-group label {
+  display: block;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--ds-muted);
+  margin-bottom: 6px;
+}
+
+.rsv-duration-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.rsv-duration-row .ds-chip { flex: 1; }
+
+/* Food preorder expander — a drawn box, same border language as .ds-card */
+.rsv-expander {
+  border: 1px solid var(--ds-rule);
+  border-radius: 0;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.rsv-expander__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--ds-surface);
+  border: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ds-ink);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--ds-dur-fast) ease;
+}
+@media (hover: hover) {
+  .rsv-expander__toggle:hover { background: #f4f2ee; }
+}
+.rsv-expander__toggle:focus-visible {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: -2px;
+}
+/* Ink, not red. Red on this page now means exactly two things — the page's
+   own full stop, and the step you are standing on. A disclosure arrow is
+   neither, and spending the accent on it was what made it stop reading as
+   an accent at all. */
+.rsv-expander__toggle-icon {
+  color: var(--ds-ink);
+  transition: transform var(--ds-dur) var(--ds-ease);
+  font-size: 12px;
+  font-weight: 800;
+}
+.rsv-expander.open .rsv-expander__toggle-icon { transform: rotate(180deg); }
+.rsv-expander__body {
+  display: none;
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--ds-rule);
+}
+.rsv-expander.open .rsv-expander__body { display: block; }
+
+.rsv-order-cat { margin-top: 12px; }
+.rsv-order-cat:first-child { margin-top: 4px; }
+.rsv-order-cat__label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ds-faint);
+  margin-bottom: 6px;
+}
+.rsv-order-dish {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ds-border);
+}
+.rsv-order-dish:last-child { border-bottom: none; }
+.rsv-order-dish__name { font-size: 14px; font-weight: 500; color: var(--ds-ink); }
+.rsv-order-dish__price { font-size: 12px; color: var(--ds-muted); margin-left: 4px; }
+
+.rsv-order-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ds-rule);
+  font-size: 14px;
+  font-weight: 700;
+}
+.rsv-order-total strong { color: var(--ds-ink); font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
+
+.rsv-hint {
+  font-size: 12px;
+  color: var(--ds-muted);
+  margin: 4px 0 18px;
+  line-height: 1.5;
+}
+
+.rsv-sheet-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+.rsv-sheet-actions .ds-btn { flex: 1; }
+/* Ghost (secondary) action keeps its intrinsic width so the primary CTA
+   next to it gets the extra room — avoids "Odeslat ověřovací kód" wrapping
+   onto two lines on narrow phones. */
+.rsv-sheet-actions .ds-btn--ghost { flex: 0 0 auto; padding-left: 18px; padding-right: 18px; }
+
+/* SMS code step */
+.rsv-code-input {
+  text-align: center;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: .3em;
+  padding-left: 18px; /* optical centering against the letter-spacing */
+}
+.rsv-code-error {
+  font-size: 13px;
+  color: var(--ds-danger);
+  margin: -8px 0 14px;
+  display: none;
+}
+.rsv-code-error.show { display: block; }
+.rsv-resend-btn { margin-top: 10px; }
+
+/* ============================================================================
+   SUCCESS — the one authored moment on this surface.
+
+   Everything up to here is a task: pick, pick, pick, type, wait for an SMS.
+   This is the single instant that is worth something to the person using it,
+   and it was a static black square with a ✓ glyph in it. Now the confirmation
+   is STAMPED: the square lands first (a hard, fast arrival — no bounce, no
+   spring, this is a rubber stamp hitting paper, not a balloon), and the mark
+   is inked into it a beat later by drawing its own stroke. The title and the
+   details follow it up off the page.
+
+   ~700ms end to end, plays once, at the emotional peak of the flow, and it
+   is the same ink-meets-paper idea as the hover wipe — one material thought
+   carried through the surface rather than a second effect bolted on.
+   prefers-reduced-motion collapses all of it via the global rule in
+   design.css; the end state is the design, so nothing is lost.
+   ============================================================================ */
+.rsv-success {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+.rsv-success__icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 16px;
+  border-radius: 0;
+  background: var(--ds-ink);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rsv-success__mark {
+  width: 26px;
+  height: 26px;
+  display: block;
+  overflow: visible;
+}
+.rsv-success__mark path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.75;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+.rsv-success__title { font-size: 21px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 6px; }
+.rsv-success__summary { font-size: 13px; color: var(--ds-ink-soft); margin-bottom: 22px; line-height: 1.5; }
+
+/* Two triggers, because the same block appears in two places: as the final
+   step of the booking sheet (display:none until .active, so the animation
+   starts the instant the step is switched to, and replays for a second
+   booking in the same session) and standalone in the payment hand-off sheet,
+   which has no steps and is simply opened. */
+.rsv-step.active .rsv-success__icon,
+#rsvPaySheet.open .rsv-success__icon {
+  animation: rsvStampLand 260ms var(--ds-ease) both;
+}
+.rsv-step.active .rsv-success__mark path,
+#rsvPaySheet.open .rsv-success__mark path {
+  stroke-dasharray: 30;
+  stroke-dashoffset: 30;
+  animation: rsvStampInk 300ms var(--ds-ease) 230ms both;
+}
+.rsv-step.active .rsv-success__title,
+#rsvPaySheet.open .rsv-success__title { animation: rsvRise 380ms var(--ds-ease) 320ms both; }
+.rsv-step.active .rsv-success__summary,
+#rsvPaySheet.open .rsv-success__summary { animation: rsvRise 380ms var(--ds-ease) 400ms both; }
+
+@keyframes rsvStampLand {
+  from { transform: scale(1.5); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+@keyframes rsvStampInk {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes rsvRise {
+  from { transform: translateY(7px); opacity: 0; }
+  to   { transform: none;            opacity: 1; }
+}
+
+/* Payment hand-off step */
+.rsv-payment-status { margin: 16px 0 4px; font-size: 14px; text-align: center; font-weight: 700; }
+.rsv-payment-status--waiting { color: var(--ds-ink-soft); font-weight: 600; }
+.rsv-payment-status--paid { color: var(--ds-success); }
+.rsv-payment-status--failed { color: var(--ds-danger); }
+.rsv-payment-note {
+  font-size: 12px;
+  color: var(--ds-muted);
+  text-align: center;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* Paused notice — hidden by default via CSS (not an inline style="" attr);
+   renderer.js toggles it (and the interactive sections below it) via
+   .style.display when settings.reservations.paused is true. */
+#rsvPausedSection { display: none; }
+
+/* ============================================================================
+   COMBO MENUS ("Zvýhodněná menu") — go-live combo-menus feature.
+   Two parts: (1) the browsable combo rows + already-added combo lines,
+   rendered inside the same #rsvOrderCategories box as the regular dish
+   categories (renderComboGroup() in renderer.js), reusing .rsv-order-cat /
+   .rsv-order-cat__label / .rsv-order-dish from the BOOKING SHEET block
+   above wherever the row shape is identical; and (2) the standalone combo
+   customize sheet (#rsvComboSheet), a second .ds-sheet stacked on top of
+   the booking sheet.
+   ============================================================================ */
+
+/* Combo row: name + price + "Přizpůsobit" on one line, contents summary
+   wrapping onto its own line below — this page is compact (rows, not the
+   big image cards the delivery page uses), so no combo image here even
+   when one exists. */
+.rsv-order-combo {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ds-border);
+}
+.rsv-order-combo:last-child { border-bottom: none; }
+.rsv-order-combo__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rsv-order-combo__name {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ds-ink);
+}
+.rsv-order-combo__price {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--ds-muted);
+  white-space: nowrap;
+}
+.rsv-order-combo__btn {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.rsv-order-combo__summary {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--ds-muted);
+  line-height: 1.4;
+}
+
+/* "Vybraná menu" — combo lines already added to the order, each its own row
+   with a qty stepper (reuses .rsv-order-dish from the BOOKING SHEET block).
+   Separated from the browsable list above by its own small label. */
+.rsv-order-combo-selected__label {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ds-faint);
+  margin: 10px 0 4px;
+}
+
+/* ── Combo customize sheet ───────────────────────────────────────────────
+   A second .ds-sheet — both it and the booking sheet (#rsvSheet) can be
+   open at once (the customer reaches for "Přizpůsobit" mid-booking), so
+   this one is bumped above .ds-sheet's own z-index (70/71 in design.css)
+   rather than relying on DOM order, which would be fragile if index.html's
+   sheet order ever changes. */
+.rsv-combo-sheet__backdrop { z-index: 80; }
+.rsv-combo-sheet { z-index: 81; }
+
+.rsv-combo-slot { margin-bottom: 14px; }
+.rsv-combo-slot:last-child { margin-bottom: 0; }
+.rsv-combo-slot__fixed {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ds-ink);
+  padding: 4px 0;
+}
+.rsv-combo-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+.rsv-combo-option input[type="radio"],
+.rsv-combo-option input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ds-ink);
+}
+.rsv-combo-option__label {
+  flex: 1 1 auto;
+  color: var(--ds-ink);
+}
+.rsv-combo-option__diff {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--ds-muted);
+  white-space: nowrap;
+}
+.rsv-combo-extras__label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ds-faint);
+  margin: 14px 0 4px;
+}
+
+/* ============================================================================
+   DESKTOP — a booking desk, not a phone screenshot floating on white.
+
+   Below 900px this is untouched: one column, scroll top to bottom, which is
+   correct for the phone the flow is actually used on. Above it, the three
+   choices sit in a left column and the payoff — the room and its tables —
+   holds a sticky right column, separated by a rule. You stop losing the
+   floorplan every time you change the hour, and the 1280px window stops
+   being 80% empty.
+   ============================================================================ */
+@media (min-width: 900px) {
+  .rsv-page {
+    max-width: 1120px;
+    display: grid;
+    grid-template-columns: minmax(300px, 360px) 1fr;
+    /* Rows 2-4 hold the three choices at their natural height; row 5 is the
+       flexible one. The tables column is taller than all three together, and
+       a spanning item hands its surplus to a flexible track — without that
+       empty 5th row the extra height would be split between rows 2-4 and
+       open two ragged gaps down the middle of the left column. */
+    grid-template-rows: auto auto auto auto 1fr;
+    column-gap: 44px;
+    align-items: start;
+    padding-bottom: 80px;
+  }
+  .rsv-hero { grid-column: 1 / -1; padding-top: 52px; padding-bottom: 12px; }
+  #rsvPausedSection { grid-column: 1 / -1; }
+
+  #rsvPartySizeSection { grid-column: 1; grid-row: 2; }
+  #rsvDayStripSection  { grid-column: 1; grid-row: 3; }
+  #rsvTimeGridSection  { grid-column: 1; grid-row: 4; }
+
+  #rsvTablesSection {
+    grid-column: 2;
+    grid-row: 2 / 6;
+    position: sticky;
+    top: 24px;
+    padding-left: 44px;
+    border-left: 1px solid var(--ds-paper-line);
+  }
+
+  /* The day strip scrolls sideways because a phone has no room to do
+     anything else. A 360px desk column has vertical room to spare, so the
+     days wrap into a block instead — no half-cut chip at the edge, and the
+     scroll indicator that went with it has nothing left to indicate. */
+  .rsv-day-strip {
+    flex-wrap: wrap;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  .rsv-day-chip { flex: 1 0 auto; }
+  .rsv-scroll-hint { display: none; }
+
+  .rsv-footer {
+    max-width: 1120px;
+    margin-top: 8px;
+  }
+}

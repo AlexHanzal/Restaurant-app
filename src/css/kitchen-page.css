@@ -1,0 +1,204 @@
+/* ============================================================================
+   kitchen-page.css — page-specific styles for kitchen.html (Kuchyň).
+   Wall-tablet / large-screen board, meant to be glanceable from a few
+   meters away — err on larger type, high-contrast state changes.
+   Builds on design.css tokens/components. Nothing here is consumed by
+   other pages.
+   ============================================================================ */
+
+html, body {
+    overflow-x: hidden;
+    min-height: 100vh;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+.kit-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--ds-bg);
+}
+.kit-header__meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+.kit-clock {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ds-ink);
+    letter-spacing: -.01em;
+}
+.kit-updated {
+    font-size: 12px;
+    color: var(--ds-muted);
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────── */
+.kit-page {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 8px 20px 48px;
+}
+
+.kit-poster {
+    padding: 16px 0 4px;
+}
+
+.kit-section {
+    margin-top: 24px;
+}
+.kit-section__head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.kit-section__count {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ds-muted);
+}
+
+/* Ticket grid: 1-col portrait / 2-col default / 3-col wide */
+.kit-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+}
+@media (min-width: 640px) {
+    .kit-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 1100px) {
+    .kit-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* ── Ticket ───────────────────────────────────────────────────────────── */
+.kit-ticket {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-left: 4px solid var(--ds-border);
+    padding: 18px 18px 16px;
+}
+.kit-ticket--overdue {
+    border-left-color: var(--ds-accent);
+}
+.kit-ticket--done {
+    opacity: .55;
+}
+
+.kit-ticket__top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+.kit-ticket__source {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.25;
+    color: var(--ds-ink);
+}
+.kit-ticket__sub {
+    font-size: 13px;
+    color: var(--ds-muted);
+    margin-top: -4px;
+}
+
+.kit-ticket__timer {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ds-ink-soft);
+    white-space: nowrap;
+}
+.kit-ticket__timer--overdue {
+    color: var(--ds-accent);
+}
+
+.kit-ticket__items {
+    list-style: none;
+    margin: 0;
+    padding: 10px 0;
+    border-top: 1px dashed var(--ds-border);
+    border-bottom: 1px dashed var(--ds-border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.kit-ticket__item {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 16px;
+    color: var(--ds-ink);
+    line-height: 1.3;
+}
+.kit-ticket__qty {
+    font-weight: 700;
+    margin-right: 6px;
+}
+.kit-ticket__item-price {
+    color: var(--ds-muted);
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.kit-ticket__total {
+    display: flex;
+    justify-content: space-between;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ds-ink);
+}
+.kit-ticket__total span:last-child {
+    color: var(--ds-accent);
+}
+
+.kit-ticket__note {
+    font-size: 13px;
+    color: var(--ds-muted);
+    font-style: italic;
+}
+
+.kit-ticket__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.kit-ticket__call {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    font-size: 13px;
+}
+
+.kit-ticket__footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+.kit-ticket__action {
+    flex: 1;
+    font-size: 16px;
+    padding: 14px 18px;
+}
+.kit-ticket__remove {
+    flex-shrink: 0;
+    padding: 12px 14px;
+    font-size: 16px;
+}
+
+.kit-grid .ds-empty {
+    grid-column: 1 / -1;
+}

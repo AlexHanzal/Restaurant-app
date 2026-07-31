@@ -1,0 +1,617 @@
+/* ============================================================================
+   design.css — shared Swiss / International Typographic Style design system
+   (tokens + components). Consumed by every frontend page. See
+   docs/superpowers/specs/2026-07-19-swiss-restyle-design.md §2-§3 for the
+   approved rationale. Component class names in this file are a CONTRACT
+   other pages/tasks rely on verbatim — do not rename.
+   Light theme only, no build step, no external font/CSS requests.
+   Flat surfaces, square corners (radius 0), no shadows, black rules,
+   poster typography, signal red used sparingly and decisively.
+   ============================================================================ */
+
+:root {
+  --ds-bg: #ffffff;
+  --ds-surface: #ffffff;
+  --ds-border: #e2e2e2;
+  --ds-rule: #111111;
+  --ds-ink: #111111;
+  --ds-ink-soft: #444444;
+  --ds-muted: #777777;
+  --ds-faint: #999999;
+  --ds-accent: #e30613;
+  --ds-accent-hover: #c00511;
+  --ds-accent-soft: #fdeaea;
+  --ds-success: #1a7a3c;
+  --ds-success-soft: #eaf3ee;
+  --ds-warn-bg: #ffffff;
+  --ds-warn-ink: #e30613;
+  --ds-danger: #e30613;
+  --ds-radius: 0;
+  --ds-radius-lg: 0;
+  --ds-shadow: none;
+  --ds-font: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+  /* ── Motion ──────────────────────────────────────────────────────────────
+     One easing curve for the whole system: a confident deceleration, no
+     bounce. Durations express distance — a colour swap is not a sheet.
+     Every interactive component below transitions on these tokens, so the
+     surfaces stay in step instead of each inventing its own timing. */
+  --ds-ease: cubic-bezier(.16, 1, .3, 1);
+  --ds-dur-fast: 130ms;   /* immediate feedback: press, focus */
+  --ds-dur: 200ms;        /* routine state change: hover, selection */
+  --ds-dur-slow: 320ms;   /* layout, overlay, section reveal */
+}
+
+/* ── Self-hosted Inter (variable) ─────────────────────────────────────── */
+@font-face {
+  font-family: "Inter";
+  src: url("/reservation/fonts/InterVariable.woff2") format("woff2-variations"),
+       url("/reservation/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Base reset ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--ds-bg);
+  color: var(--ds-ink);
+  font-family: var(--ds-font);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+h1, h2, h3, h4, p { margin: 0; }
+button { font-family: inherit; }
+a { color: inherit; }
+img { max-width: 100%; display: block; }
+
+/* Digits carry meaning on every surface here — dates, times, seat counts,
+   prices, order totals. Lining tabular figures stop a grid of numbers from
+   jittering as it re-renders and keep columns of prices optically aligned. */
+:root { font-variant-numeric: tabular-nums lining-nums; }
+
+/* Motion below is authored, not decorative — but it is still motion. Honour
+   the OS preference by collapsing every duration to a hair rather than
+   removing the state change, so feedback survives. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keyboard focus was previously styled on inputs only — buttons and chips,
+   the two controls this product is almost entirely made of, had none. One
+   ring, drawn outside the element so it never disturbs a tight grid. */
+.ds-btn:focus-visible,
+.ds-chip:focus-visible,
+.ds-list-row:focus-visible,
+.ds-stepper__btn:focus-visible {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: 2px;
+}
+
+/* ============================================================================
+   INK WIPE — the system's one hover gesture, shared by .ds-btn and .ds-chip.
+
+   A flat black-rule system can't lift, glow or soften on hover: it has no
+   shadow and no radius to work with. What it does have is ink. So a hovered
+   control fills — a band of ink rises from its bottom edge and floods the
+   box, the label reversing out white as it arrives. It is the press of a
+   rubber stamp, which is what these controls already look like at rest.
+
+   Implemented as an animated background-size on a background-IMAGE, not a
+   pseudo-element: background images paint above background-colour and below
+   the element's own text, so a bare `<button>Text</button>` reverses out
+   correctly with no extra markup and no z-index juggling — which matters,
+   since renderer.js builds most of these buttons from a text node.
+
+   Guarded by (hover: hover) so it never latches on a phone, where the whole
+   booking flow actually lives; touch gets the instant :active fill instead.
+   ============================================================================ */
+.ds-ink-wipe,
+.ds-btn,
+.ds-chip {
+  background-image: linear-gradient(var(--ds-ink) 0 100%);
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 0;
+}
+
+@media (hover: hover) {
+  .ds-btn:hover,
+  .ds-chip:hover { background-size: 100% 100%; color: #fff; }
+}
+/* Touch and keyboard-activation feedback: no wipe to watch, just the result. */
+.ds-btn:active,
+.ds-chip:active { background-size: 100% 100%; color: #fff; }
+
+/* ============================================================================
+   BUTTONS — .ds-btn (+ --primary / --ghost / --dark / --danger / --success /
+   --block). Rectangular, uppercase, weight 800, letter-spaced. No radius,
+   no shadow — a stamped label, not a soft pill.
+   ============================================================================ */
+.ds-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 22px;
+  border-radius: var(--ds-radius);
+  border: 1px solid var(--ds-rule);
+  /* background-COLOR, not the shorthand: the shorthand resets
+     background-image and would wipe out the ink-wipe layer set above. */
+  background-color: var(--ds-surface);
+  color: var(--ds-ink);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-size var(--ds-dur) var(--ds-ease),
+              background-color var(--ds-dur-fast) ease,
+              border-color var(--ds-dur-fast) ease,
+              color var(--ds-dur-fast) ease,
+              opacity var(--ds-dur-fast) ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.ds-btn:disabled,
+.ds-btn[aria-disabled="true"] {
+  opacity: .4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* The coloured variants keep their own fill and wipe to a DEEPER version of
+   themselves rather than to ink — a red CTA turning black on hover would read
+   as a different button, not the same one under the cursor. */
+.ds-btn--primary,
+.ds-btn--danger {
+  background-color: var(--ds-accent);
+  background-image: linear-gradient(var(--ds-accent-hover) 0 100%);
+  border-color: var(--ds-accent);
+  color: #fff;
+}
+@media (hover: hover) {
+  .ds-btn--primary:hover,
+  .ds-btn--danger:hover { border-color: var(--ds-accent-hover); }
+}
+.ds-btn--primary:active,
+.ds-btn--danger:active { border-color: var(--ds-accent-hover); }
+
+.ds-btn--ghost {
+  background-color: transparent;
+  border-color: var(--ds-ink);
+  color: var(--ds-ink);
+}
+
+.ds-btn--dark {
+  background-color: var(--ds-ink);
+  background-image: linear-gradient(#000 0 100%);
+  border-color: var(--ds-ink);
+  color: #fff;
+}
+@media (hover: hover) { .ds-btn--dark:hover { border-color: #000; } }
+.ds-btn--dark:active { border-color: #000; }
+
+.ds-btn--success {
+  background-color: var(--ds-success);
+  background-image: linear-gradient(#135e30 0 100%);
+  border-color: var(--ds-success);
+  color: #fff;
+}
+@media (hover: hover) { .ds-btn--success:hover { border-color: #135e30; } }
+.ds-btn--success:active { border-color: #135e30; }
+
+.ds-btn--block { display: flex; width: 100%; }
+
+/* ============================================================================
+   CHIPS — .ds-chip (+ --selected / --accent / --disabled). Rectangles, not
+   pills.
+   ============================================================================ */
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 16px;
+  border-radius: var(--ds-radius);
+  border: 1px solid var(--ds-rule);
+  /* background-COLOR, not the shorthand — see the note on .ds-btn above. */
+  background-color: var(--ds-surface);
+  color: var(--ds-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-size var(--ds-dur) var(--ds-ease),
+              background-color var(--ds-dur-fast) ease,
+              border-color var(--ds-dur-fast) ease,
+              color var(--ds-dur-fast) ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Already inked. It stays put under the cursor — the wipe is what it means
+   to become selected, so replaying it on the current selection would be a
+   lie about what the click does. */
+.ds-chip--selected {
+  background-color: var(--ds-ink);
+  background-size: 100% 100%;
+  border-color: var(--ds-ink);
+  color: #fff;
+}
+
+.ds-chip--accent {
+  background-color: var(--ds-accent);
+  background-image: linear-gradient(var(--ds-accent) 0 100%);
+  background-size: 100% 100%;
+  border-color: var(--ds-accent);
+  color: #fff;
+}
+
+.ds-chip--disabled {
+  background-color: transparent;
+  background-image: none;
+  border-color: var(--ds-border);
+  color: var(--ds-faint);
+  text-decoration: line-through;
+  cursor: not-allowed;
+  pointer-events: none;
+  opacity: .65;
+}
+
+/* ============================================================================
+   CARD — .ds-card. A drawn box: white, 1px black rule, no radius/shadow.
+   ============================================================================ */
+.ds-card {
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-rule);
+  border-radius: var(--ds-radius-lg);
+  box-shadow: var(--ds-shadow);
+  padding: 16px;
+}
+
+/* ============================================================================
+   INPUTS — .ds-input (also styles select / textarea)
+   ============================================================================ */
+.ds-input {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--ds-radius);
+  border: 1px solid var(--ds-rule);
+  background: var(--ds-surface);
+  color: var(--ds-ink);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.3;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: border-color .15s ease, outline-color .15s ease;
+}
+.ds-input::placeholder { color: var(--ds-faint); }
+.ds-input:focus {
+  outline: 2px solid var(--ds-ink);
+  outline-offset: -2px;
+  border-color: var(--ds-ink);
+}
+.ds-input:disabled { opacity: .55; cursor: not-allowed; }
+
+select.ds-input {
+  padding-right: 38px;
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 11px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23111111' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+textarea.ds-input { resize: vertical; min-height: 84px; }
+
+/* ============================================================================
+   BADGES — .ds-badge (+ --paid / --unpaid). Rectangular outlined labels, not
+   tinted pills.
+   ============================================================================ */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--ds-radius);
+  border: 1px solid currentColor;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.ds-badge--paid { color: var(--ds-success); }
+.ds-badge--unpaid { color: var(--ds-warn-ink); }
+
+/* ============================================================================
+   SHEET — .ds-sheet (+ __handle / __backdrop). Bottom sheet on phones
+   (<=640px), centered modal on wider viewports. Toggle open state by adding
+   the "open" class to both the backdrop and the sheet element. Square,
+   opening edge carries a 2px black rule; handle is a black bar.
+   ============================================================================ */
+.ds-sheet__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 17, 17, .5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 70;
+}
+.ds-sheet__backdrop.open { opacity: 1; pointer-events: auto; }
+
+.ds-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 71;
+  background: var(--ds-surface);
+  border-radius: var(--ds-radius-lg);
+  border-top: 2px solid var(--ds-rule);
+  box-shadow: var(--ds-shadow);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 10px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .28s cubic-bezier(.32, .72, 0, 1), opacity .2s ease;
+}
+.ds-sheet.open { transform: translateY(0); opacity: 1; pointer-events: auto; }
+
+.ds-sheet__handle {
+  width: 40px;
+  height: 4px;
+  border-radius: var(--ds-radius);
+  background: var(--ds-ink);
+  margin: 6px auto 16px;
+}
+
+@media (min-width: 641px) {
+  .ds-sheet {
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    top: 50%;
+    width: min(480px, 92vw);
+    max-height: 85vh;
+    border-radius: var(--ds-radius-lg);
+    border-top: 2px solid var(--ds-rule);
+    box-shadow: var(--ds-shadow);
+    transform: translate(-50%, -46%);
+    padding: 20px 24px 24px;
+  }
+  .ds-sheet.open { transform: translate(-50%, -50%); }
+  .ds-sheet__handle { display: none; }
+}
+
+/* ============================================================================
+   TOAST — .ds-toast
+   ============================================================================ */
+.ds-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 12px);
+  max-width: 90vw;
+  padding: 12px 20px;
+  border-radius: var(--ds-radius);
+  background: var(--ds-ink);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  box-shadow: var(--ds-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s ease;
+  z-index: 90;
+}
+.ds-toast.show { opacity: 1; transform: translate(-50%, 0); }
+.ds-toast.error { background: var(--ds-danger); }
+
+/* ============================================================================
+   EMPTY STATE — .ds-empty. Plain text with a rule above; no emoji-decoration.
+   ============================================================================ */
+.ds-empty {
+  text-align: left;
+  padding: 20px 0;
+  border-top: 1px solid var(--ds-rule);
+  color: var(--ds-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ============================================================================
+   MICROLABEL — .ds-microlabel
+   ============================================================================ */
+.ds-microlabel {
+  display: block;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: var(--ds-faint);
+}
+
+/* ============================================================================
+   POSTER HEADING — .ds-poster. Large, tight, weight-800 page titles that end
+   with a period ("Rezervace stolu.", "Rozvoz.", "Kuchyň.").
+   ============================================================================ */
+.ds-poster {
+  /* Fluid, so the title is a poster on a laptop and still a poster on a
+     360px phone instead of the same 32px in both. Tracking tightens as it
+     grows, which is what the size actually needs. */
+  font-size: clamp(34px, 6.5vw, 60px);
+  font-weight: 800;
+  letter-spacing: -.038em;
+  line-height: 1.02;
+  text-wrap: balance;
+  color: var(--ds-ink);
+  margin: 0;
+}
+/* The full stop is the wordmark of this type system — it ends every page
+   title. Inking it red is the one place the accent is pure identity rather
+   than status, and it costs no extra element. */
+.ds-poster__stop { color: var(--ds-accent); }
+
+/* ============================================================================
+   PAGE HEADER — .ds-page-header (+ .ds-wordmark). A thin top strip closed by
+   a 2px black rule: wordmark left, current section name right in red
+   uppercase. Large page titles live in a separate .ds-poster heading in the
+   page body, not inside this strip.
+   ============================================================================ */
+.ds-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 2px solid var(--ds-rule);
+}
+.ds-page-header__titles { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ds-page-header__title {
+  font-size: 14px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ds-ink);
+}
+.ds-page-header__actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.ds-page-header__section {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  color: var(--ds-accent);
+}
+
+.ds-wordmark {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .18em;
+  color: var(--ds-ink);
+}
+
+/* ============================================================================
+   STEPPER — .ds-stepper ( − n + )
+   ============================================================================ */
+.ds-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--ds-rule);
+  border-radius: var(--ds-radius);
+  background: var(--ds-surface);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ds-stepper__btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--ds-ink);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  background-image: linear-gradient(var(--ds-ink) 0 100%);
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 0;
+  transition: background-size var(--ds-dur-fast) var(--ds-ease), color var(--ds-dur-fast) ease;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (hover: hover) {
+  .ds-stepper__btn:hover { background-size: 100% 100%; color: #fff; }
+}
+.ds-stepper__btn:active { background-size: 100% 100%; color: #fff; }
+.ds-stepper__btn:disabled { opacity: .4; cursor: not-allowed; }
+.ds-stepper__value {
+  min-width: 22px;
+  padding: 0 8px;
+  border-left: 1px solid var(--ds-rule);
+  border-right: 1px solid var(--ds-rule);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ds-ink);
+}
+
+/* ============================================================================
+   LIST ROW — .ds-list-row. Borderless boxes separated by a 1px black rule
+   above each row; the last row closes the list with a rule below too.
+   Trailing glyph is a red →.
+   ============================================================================ */
+.ds-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 2px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--ds-rule);
+  border-radius: var(--ds-radius);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* The highlight sweeps in from the leading edge and the row's content
+     steps toward the arrow — the row leans the way the tap will take you.
+     Paint-only: no width/height/margin animates, so the list never reflows
+     under the cursor. */
+  background-image: linear-gradient(#f4f2ee 0 100%);
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 0 100%;
+  transition: background-size var(--ds-dur-slow) var(--ds-ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.ds-list-row:last-child { border-bottom: 1px solid var(--ds-rule); }
+@media (hover: hover) {
+  .ds-list-row:hover { background-size: 100% 100%; }
+  .ds-list-row:hover .ds-list-row__body { transform: translateX(4px); }
+  .ds-list-row:hover .ds-list-row__chevron { transform: translateX(6px); }
+}
+.ds-list-row:active { background-size: 100% 100%; }
+.ds-list-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  transition: transform var(--ds-dur) var(--ds-ease);
+}
+.ds-list-row__title { font-size: 15px; font-weight: 700; color: var(--ds-ink); }
+.ds-list-row__subtitle {
+  font-size: 13px;
+  color: var(--ds-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-list-row__chevron {
+  flex-shrink: 0;
+  color: var(--ds-accent);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  transition: transform var(--ds-dur) var(--ds-ease);
+}

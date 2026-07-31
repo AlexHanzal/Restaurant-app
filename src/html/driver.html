@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rozvoz — Řidiči</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/reservation/css/design.css">
+<link rel="stylesheet" href="/reservation/css/driver-page.css">
+</head>
+<body>
+
+<!-- Login gate -->
+<div class="drv-gate" id="loginGateOverlay">
+    <div class="ds-card drv-gate__card">
+        <span class="ds-wordmark">Restaurace</span>
+        <h2 class="drv-gate__title">Přihlášení řidiče</h2>
+        <p class="drv-gate__hint">Pro zobrazení objednávek k rozvozu se prosím přihlaste svým účtem (vytvořeným v administraci se zaškrtnutým „Řidič“).</p>
+        <div class="drv-field-group">
+            <label for="loginUsernameInput">Zkratka</label>
+            <input type="text" id="loginUsernameInput" class="ds-input" placeholder="Např. JN" autocomplete="username">
+        </div>
+        <div class="drv-field-group">
+            <label for="loginPasswordInput">Heslo</label>
+            <input type="password" id="loginPasswordInput" class="ds-input" placeholder="Heslo" autocomplete="current-password">
+        </div>
+        <p class="drv-gate__error" id="loginError"></p>
+        <button type="button" class="ds-btn ds-btn--primary ds-btn--block" id="loginSubmitBtn">Přihlásit se</button>
+    </div>
+</div>
+
+<header class="ds-page-header">
+    <span class="ds-wordmark">Restaurace</span>
+    <div class="ds-page-header__actions">
+        <span class="drv-driver-name" id="loggedInDriverText"></span>
+        <button type="button" class="ds-btn ds-btn--ghost drv-hidden" id="logoutBtn">Odhlásit</button>
+        <span class="ds-page-header__section">Řidič</span>
+    </div>
+</header>
+
+<main class="drv-page">
+    <h1 class="ds-poster drv-poster">Moje rozvozy.</h1>
+    <div class="drv-list" id="ordersList"></div>
+</main>
+
+<div class="ds-toast" id="toast"></div>
+
+<!-- SECURITY (3rd hardening pass): see delivery.html for why the old inline
+     window.API_BASE_URL bootstrap script was removed (it was dead code,
+     always overwritten by config.js's autoDetectBackend()) rather than
+     kept — this lets the CSP script-src drop 'unsafe-inline'. -->
+<script src="/reservation/config.js"></script>
+<script src="/reservation/js/driver.js"></script>
+</body>
+</html>

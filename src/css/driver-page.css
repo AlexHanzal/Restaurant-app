@@ -1,0 +1,178 @@
+/* ============================================================================
+   driver-page.css — page-specific styles for driver.html (Řidič).
+   Phone-first, one-handed use in a moving vehicle — big tap targets,
+   minimal reading required per card. Builds on design.css tokens/
+   components. Nothing here is consumed by other pages.
+   ============================================================================ */
+
+html, body {
+    overflow-x: hidden;
+    min-height: 100vh;
+}
+
+.drv-hidden { display: none !important; }
+
+/* ── Login gate ───────────────────────────────────────────────────────── */
+.drv-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: var(--ds-bg);
+}
+.drv-gate__card {
+    width: 100%;
+    max-width: 380px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 28px 24px;
+}
+.drv-gate__title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin: 6px 0 4px;
+}
+.drv-gate__hint {
+    font-size: 13px;
+    color: var(--ds-ink-soft);
+    line-height: 1.5;
+    margin: 0 0 18px;
+}
+
+.drv-field-group { margin-bottom: 14px; }
+.drv-field-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ds-ink-soft);
+    margin-bottom: 6px;
+}
+
+.drv-gate__error {
+    font-size: 13px;
+    color: var(--ds-danger);
+    margin: -6px 0 14px;
+    display: none;
+}
+.drv-gate__error.show { display: block; }
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+.drv-driver-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ds-ink-soft);
+    white-space: nowrap;
+}
+/* Below ~420px the driver name competes with the page title for space and
+   wraps the title mid-word — drop it and keep just the logout button; the
+   name is already confirmed via the login toast. */
+@media (max-width: 420px) {
+    .drv-driver-name { display: none; }
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────── */
+.drv-page {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 8px 16px 48px;
+}
+
+.drv-poster {
+    padding: 8px 0 6px;
+}
+
+.drv-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* ── Order card ───────────────────────────────────────────────────────── */
+.drv-order {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.drv-order--mine {
+    border-color: var(--ds-accent);
+}
+.drv-order--queued {
+    opacity: .6;
+}
+
+.drv-order__top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+.drv-order__id {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ds-ink);
+}
+.drv-order__time {
+    font-size: 12px;
+    color: var(--ds-muted);
+    white-space: nowrap;
+}
+
+.drv-order__address {
+    font-size: 14px;
+    color: var(--ds-ink);
+    line-height: 1.4;
+}
+
+.drv-order__queued {
+    font-size: 13px;
+    color: var(--ds-muted);
+    font-style: italic;
+}
+
+.drv-order__actions-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.drv-order__actions-row .ds-btn { flex: 1; padding: 10px 12px; font-size: 13px; }
+
+.drv-order__meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.drv-order__price {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ds-ink);
+}
+
+.drv-order__note {
+    font-size: 12px;
+    color: var(--ds-muted);
+    font-style: italic;
+}
+
+.drv-order__done {
+    text-align: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ds-success);
+    padding: 10px;
+    background: var(--ds-success-soft);
+    border-radius: var(--ds-radius);
+}
+
+.drv-order .ds-btn--block {
+    font-size: 15px;
+    padding: 14px 18px;
+}
+
+.drv-empty-wrap { padding: 8px 0; }

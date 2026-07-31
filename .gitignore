@@ -1,0 +1,29 @@
+.superpowers/
+
+# SECURITY (audit 2026-07-29, finding F6): the live SQLite database holds
+# customer names, addresses, phone numbers, full order history and bcrypt
+# password hashes. It must never be committed — including the backup and
+# orphaned-WAL copies that accumulate next to it (data/ currently holds
+# app.db plus .bak-* and .orphan-* siblings).
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets live in the environment, never in the repo.
+.env
+.env.*
+!.env.example
+
+# EET 2.0 pokladní certifikát — the .p12 from MOJE daně and the PEM files
+# converted from it. Possession of the private key is possession of the
+# ability to file sales in the restaurant's name. NEVER commit these.
+secrets/
+*.p12
+*.pem
+
+node_modules/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

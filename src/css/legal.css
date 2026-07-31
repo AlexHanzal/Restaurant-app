@@ -1,0 +1,129 @@
+/* ============================================================================
+   legal.css — page-specific styles for the three static legal template pages
+   (obchodni-podminky.html, ochrana-osobnich-udaju.html, reklamace.html).
+   Builds on design.css tokens/components only — no new colors, no radius,
+   no shadows (see design.css header comment). Nothing here is consumed by
+   other pages.
+   ============================================================================ */
+
+html, body {
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+.legal-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 20px 48px;
+}
+
+/* ── Hero ─────────────────────────────────────────────────────────────── */
+.legal-hero {
+  padding: 28px 0 4px;
+}
+.legal-hero .ds-poster { font-size: 26px; }
+.legal-updated {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ds-muted);
+}
+
+/* ── Sections ─────────────────────────────────────────────────────────── */
+.legal-section {
+  padding: 24px 0 0;
+}
+.legal-section:last-of-type { padding-bottom: 8px; }
+.legal-section h2 {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  color: var(--ds-ink);
+  margin: 0 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ds-rule);
+}
+.legal-section p {
+  margin: 0 0 12px;
+  color: var(--ds-ink-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.legal-section p:last-child { margin-bottom: 0; }
+.legal-section ul,
+.legal-section ol {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: var(--ds-ink-soft);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.legal-section li { margin-bottom: 4px; }
+.legal-section a { color: var(--ds-accent); text-decoration: underline; }
+.legal-section strong { color: var(--ds-ink); }
+/* Cookie names in §6 — set in mono so a reader can match them against what
+   their browser's storage inspector actually shows. */
+.legal-section code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92em;
+  color: var(--ds-ink);
+  word-break: break-word;
+}
+
+/* ── Operator identity list ───────────────────────────────────────────── */
+.legal-identity {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 16px;
+  border: 1px solid var(--ds-rule);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.legal-identity li { margin-bottom: 0; }
+.legal-identity strong {
+  display: inline-block;
+  min-width: 150px;
+  font-weight: 800;
+}
+
+/* ── Back link in the page header ────────────────────────────────────── */
+.legal-back-link {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+/* ── Lawyer-review warning box (required on every legal page) ───────────── */
+.legal-warning {
+  margin-top: 32px;
+  padding: 16px;
+  border: 2px solid var(--ds-warn-ink);
+  color: var(--ds-warn-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ── Footer: cross-links to the other legal pages ───────────────────────── */
+.legal-footer {
+  max-width: 760px;
+  margin: 32px auto 0;
+  padding: 24px 20px;
+  text-align: center;
+  border-top: 1px solid var(--ds-border);
+}
+.legal-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.legal-footer-links a { color: var(--ds-ink); text-decoration: underline; }
+.legal-footer-business {
+  font-size: 12px;
+  color: var(--ds-muted);
+}

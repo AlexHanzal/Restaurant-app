@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kuchyně — Objednávky</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/reservation/css/design.css">
+<link rel="stylesheet" href="/reservation/css/kitchen-page.css">
+</head>
+<body>
+
+<header class="ds-page-header kit-header">
+    <span class="ds-wordmark">Restaurace</span>
+    <div class="ds-page-header__actions">
+        <div class="kit-header__meta">
+            <span class="kit-clock" id="kitClock"></span>
+            <span class="kit-updated" id="lastUpdatedText"></span>
+        </div>
+        <span class="ds-page-header__section">Kuchyň</span>
+    </div>
+</header>
+
+<main class="kit-page">
+    <h1 class="ds-poster kit-poster">Kuchyň.</h1>
+    <section class="kit-section">
+        <div class="kit-section__head">
+            <span class="ds-microlabel">🍽️ U stolu</span>
+            <span class="kit-section__count" id="indoorCount"></span>
+        </div>
+        <div class="kit-grid" id="indoorOrders"></div>
+    </section>
+
+    <section class="kit-section">
+        <div class="kit-section__head">
+            <span class="ds-microlabel">🚴 Rozvoz</span>
+            <span class="kit-section__count" id="deliveryCount"></span>
+        </div>
+        <div class="kit-grid" id="deliveryOrders"></div>
+    </section>
+</main>
+
+<div class="ds-toast" id="toast"></div>
+
+<!-- SECURITY (3rd hardening pass): see delivery.html for why the old inline
+     window.API_BASE_URL bootstrap script was removed (it was dead code,
+     always overwritten by config.js's autoDetectBackend()) rather than
+     kept — this lets the CSP script-src drop 'unsafe-inline'. -->
+<script src="/reservation/config.js"></script>
+<script src="/reservation/js/kitchen.js"></script>
+</body>
+</html>

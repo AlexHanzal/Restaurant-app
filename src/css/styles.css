@@ -1,0 +1,373 @@
+/* ============================================================================
+   School Reservation System — styles.css
+   Single stylesheet for both the customer-facing page (index.html) and the
+   internal admin page (inner.html). Replaces the old styles.css + buttons.css
+   (dead legacy UI removed) — inner.css still layers on top of this file.
+   ============================================================================ */
+
+/* ─── DESIGN TOKENS ────────────────────────────────────────────────────── */
+
+:root {
+  /* Dark theme (default) */
+  --primary-color: #50b0ff;
+  --secondary-color: #eeeeee;
+  --third-color: #f1f1f1;
+  --fifth-color: #ffffff;
+  --header-bg: rgb(224, 224, 224);
+  --sidebar-bg: #e6e6e6;
+  --font-family: Arial, Helvetica, sans-serif;
+  --header-height: 10%;
+  --highlight-color: #cdcdcd;
+  --bakalar-color-basic: #ffffff;
+  --bakalar-color-hover: #ffffff;
+}
+
+:root[data-theme="light"] {
+  /* Light theme */
+  --primary-color: #474747;
+  --secondary-color: #d9d9d9;
+  --third-color: #f0f0f0;
+  --fifth-color: #000000;
+  --header-bg: #c2c2c2;
+  --sidebar-bg: #cccccc;
+  --highlight-color: #a8a8a8;
+}
+
+* {
+  font-family: var(--font-family);
+}
+
+html, body {
+  height: auto;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+body {
+  background-color: #fefefe;
+  padding-bottom: 100px;
+}
+
+/* ─── HEADER / TITLE ───────────────────────────────────────────────────── */
+
+header {
+  background-color: var(--third-color);
+  text-align: center;
+  color: #455459;
+  font-size: 1.5em;
+  font-weight: bold;
+  padding: 14px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: #d9d9d9 solid 1px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.title {
+  color: var(--primary-color);
+  font-size: 2em;
+  text-align: center;
+  padding: auto;
+  font-weight: bold;
+  text-shadow: 2px 2px 4px #000000;
+}
+
+/* ─── HOTBAR (date / time / attribute filters) ────────────────────────── */
+
+.hotbar {
+  min-height: 60px;
+  background-color: var(--sidebar-bg);
+  border-bottom: 1px solid #d9d9d9;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 15px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.hotbar-filters {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.hotbar-filter-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.hotbar-filter-field label {
+  font-size: 0.8em;
+  color: var(--primary-color);
+  font-weight: bold;
+}
+
+.hotbar-filter-field input[type="date"],
+.hotbar-filter-field select {
+  padding: 6px 8px;
+  border: 1.5px solid var(--line, #d9d9d9);
+  border-radius: 5px;
+  font-family: inherit;
+  font-size: 0.88em;
+  background: var(--paper, #f1f1f1);
+  color: var(--ink, #2b2b2b);
+}
+
+.hotbar-filter-field input:disabled,
+.hotbar-filter-field select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hotbar-attrs-field {
+  align-items: flex-start;
+  flex: 1;
+  justify-content: center;
+}
+
+.filter-checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  max-width: 320px;
+}
+
+.filter-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 0.85em;
+  padding: 4px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--line, #d9d9d9);
+  background: var(--paper, #f1f1f1);
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.filter-checkbox-label:hover {
+  background-color: var(--highlight-color);
+}
+
+.filter-checkbox-label input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--primary-color);
+  cursor: pointer;
+}
+
+.filter-checkbox-label input[type="checkbox"]:checked + span,
+.filter-checkbox-label:has(input:checked) {
+  color: var(--primary-color);
+  font-weight: bold;
+}
+
+.no-attributes-msg,
+.no-tables-msg {
+  color: #999;
+  font-style: italic;
+  font-size: 0.9em;
+  margin: 0;
+}
+
+/* Mobile-only "Vlastnosti" popup trigger button (hidden on desktop) */
+.attrs-popup-btn {
+  display: none;
+  padding: 6px 14px;
+  border-radius: 14px;
+  border: 1.5px solid var(--primary-color);
+  background: var(--bakalar-color-basic, #fff);
+  color: var(--primary-color);
+  font-weight: bold;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.attrs-count {
+  font-weight: bold;
+}
+
+.filter-checkboxes-popup {
+  max-width: none;
+  justify-content: flex-start;
+}
+
+/* ─── RESERVATION RESULTS PANEL (static, below hotbar) ─────────────────── */
+
+.reservation-results-panel {
+  position: relative;
+  padding: 18px 24px 40px;
+  box-sizing: border-box;
+}
+
+.reservation-results-title {
+  margin: 0 0 12px 0;
+  color: var(--primary-color);
+  font-size: 1.1em;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.filter-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-card-name {
+  font-weight: bold;
+  font-size: 1em;
+  margin-bottom: 6px;
+}
+
+.filter-card-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.attr-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background-color: var(--highlight-color);
+  border: 1px solid var(--primary-color);
+  border-radius: 12px;
+  font-size: 0.8em;
+  color: black;
+}
+
+.no-attr-hint {
+  font-size: 0.8em;
+  color: #aaa;
+  font-style: italic;
+}
+
+/* ─── RESERVATION FORM EXTRAS (date/time inputs + bookable result cards) ─── */
+
+.inn-field-group input[type="date"],
+.inn-field-group select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1.5px solid var(--line, #d9d9d9);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.92em;
+  background: var(--paper, #f1f1f1);
+  color: var(--ink, #2b2b2b);
+  box-sizing: border-box;
+}
+
+.reservation-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 2px solid var(--primary-color);
+  border-radius: 7px;
+  background-color: var(--bakalar-color-basic);
+}
+
+.reservation-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.reservation-card-btn {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  background: var(--accent, var(--primary-color));
+  border: 1.5px solid var(--accent, var(--primary-color));
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 0.85em;
+}
+
+.reservation-card-btn:hover {
+  background: var(--accent-deep, var(--primary-color));
+}
+
+/* ─── RESPONSIVE ───────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .title {
+    font-size: 1em;
+    text-shadow: 1px 1px 2px #000000;
+  }
+}
+
+@media (max-width: 700px) {
+  header {
+    font-size: 1em;
+    padding: 10px 5px;
+  }
+  .hotbar {
+    min-height: 50px;
+    gap: 5px;
+    padding: 6px 10px;
+  }
+  .title {
+    font-size: 0.6em;
+    text-shadow: none;
+  }
+  .reservation-results-panel {
+    padding: 14px 12px 30px;
+  }
+  .hotbar-filters {
+    gap: 8px;
+  }
+
+  /* Turn the "Vlastnosti" inline checkbox list into a popup trigger */
+  .hotbar-attrs-field {
+    justify-content: flex-start;
+  }
+  .hotbar-attrs-field .attrs-desktop-label,
+  .hotbar-attrs-field > .filter-checkboxes {
+    display: none;
+  }
+  .attrs-popup-btn {
+    display: inline-block;
+  }
+}
+
+@media (max-width: 500px) {
+  header {
+    font-size: 0.9em;
+    padding: 8px 2px;
+  }
+  .hotbar {
+    min-height: 44px;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .title {
+    font-size: 0.5em;
+  }
+  .reservation-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .reservation-card-btn {
+    width: 100%;
+  }
+}

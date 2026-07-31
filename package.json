@@ -1,0 +1,41 @@
+{
+  "name": "school-reservation-system",
+  "version": "1.0.0",
+  "description": "School Reservation System - A web application for managing school resource reservations",
+  "main": "src/server/server.js",
+  "scripts": {
+    "start": "node src/server/server.js",
+    "dev": "node src/server/server.js",
+    "server": "node src/server/server.js",
+    "migrate:hash-passwords": "node src/server/migrate-hash-passwords.js",
+    "test": "node --test",
+    "test:unit": "node --test \"tests/unit/**/*.test.js\"",
+    "test:smoke": "node --test \"tests/smoke/**/*.test.js\""
+  },
+  "keywords": [
+    "school",
+    "reservation",
+    "timetable",
+    "management",
+    "web-app"
+  ],
+  "author": "Alex Hanzal",
+  "license": "Ligma Balls s.r.o.",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.11.1",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "esbuild": "^0.28.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.6.0",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "subset-font": "^2.5.0",
+    "zod": "^4.4.3"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

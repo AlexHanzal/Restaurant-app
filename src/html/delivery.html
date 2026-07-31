@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Rozvoz — Jídelní lístek</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/reservation/css/design.css">
+<link rel="stylesheet" href="/reservation/css/delivery-page.css">
+</head>
+<body>
+
+<header class="ds-page-header">
+  <span class="ds-wordmark">Restaurace</span>
+  <span class="ds-page-header__section">Rozvoz</span>
+</header>
+
+<!-- Shown when settings.delivery.paused or the current time is outside
+     today's delivery hours (fetched from GET /settings by delivery.js).
+     Server is the actual authority (see POST /orders) — this is just the
+     front-of-house reflection of that state. Menu stays browsable either
+     way; only checkout submission is blocked. -->
+<div class="del-notice" id="deliveryNotice" hidden></div>
+
+<div class="del-hero">
+  <h1 class="ds-poster">Rozvoz.</h1>
+  <!-- "Objednat znovu" (reorder) — spec: docs/superpowers/specs/2026-07-25-
+       reorder-design.md §8. Tapping opens reorderSheet below, whose content
+       is entirely rebuilt by JS (renderReorderPhoneStep/-CodeStep/
+       -OrdersList/-Empty in delivery.js) depending on whether this browser
+       has already proved control of a phone number (httpOnly reorder_token
+       cookie) — mirrors the combo customize sheet's single-shared-sheet
+       pattern further down this file. -->
+  <button type="button" class="ds-chip ds-chip--accent del-reorder-chip" id="reorderChipBtn">↻ Objednat znovu</button>
+</div>
+
+<nav class="del-cat-nav" id="catTabs" aria-label="Kategorie menu"></nav>
+
+<main class="del-page">
+  <div id="menuSections"></div>
+</main>
+
+<footer class="del-footer">
+  <!-- go-live Task 5 (spec §7): populated client-side from GET /settings
+       (see fetchRestaurantSettings()/renderFooterBusinessLine() in
+       delivery.js) — the static "[doplnit]" placeholder text is gone. -->
+  <span id="footerBusinessLine"></span>
+  <nav class="del-footer__links">
+    <a href="/reservation/obchodni-podminky">Obchodní podmínky</a>
+    <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
+    <a href="/reservation/reklamace">Reklamační řád</a>
+  </nav>
+</footer>
+
+<!-- ── Sticky cart bar: visible once the cart has items ── -->
+<button type="button" class="del-cartbar" id="openCartBtn" hidden>
+  <span class="del-cartbar__label">Košík · <span id="cartCount">0</span> položek</span>
+  <span class="del-cartbar__total"><span id="cartBarTotal">0 Kč</span> →</span>
+</button>
+
+<!-- ── Checkout sheet: cart items + contact + payment method + submit ── -->
+<div class="ds-sheet__backdrop" id="cartSheetBackdrop"></div>
+<div class="ds-sheet" id="cartSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="cartSheetTitle">
+  <div class="ds-sheet__handle"></div>
+  <div class="del-sheet-head">
+    <h3 class="del-sheet-title" id="cartSheetTitle">Váš košík</h3>
+    <button type="button" class="del-sheet-close" id="closeCartBtn" aria-label="Zavřít">&times;</button>
+  </div>
+
+  <div class="del-cart-items" id="cartItems"></div>
+
+  <!-- Delivery pricing summary (settings.delivery — fee/free-above/ETA):
+       subtotal + delivery fee, a "X Kč do dopravy zdarma" progress hint, and
+       the grand total. Server re-derives all of this on POST /orders — this
+       is purely a live preview so the customer isn't surprised at the end. -->
+  <div class="del-cart-summary" id="cartSummary">
+    <div class="del-cart-summary__row">
+      <span>Mezisoučet</span>
+      <span id="cartSubtotalText">0 Kč</span>
+    </div>
+    <div class="del-cart-summary__row">
+      <span>Doprava</span>
+      <span id="cartDeliveryFeeText">0 Kč</span>
+    </div>
+    <p class="del-free-above-hint" id="freeAboveHint" hidden></p>
+  </div>
+
+  <div class="del-cart-total-row">
+    <span>Celkem</span>
+    <span id="cartTotalText">0 Kč</span>
+  </div>
+
+  <p class="del-eta-line" id="etaLine" hidden></p>
+  <p class="del-min-order-hint" id="minOrderHint" hidden></p>
+
+  <div class="del-field-group">
+    <label for="checkoutNameInput">Jméno</label>
+    <input type="text" id="checkoutNameInput" class="ds-input" placeholder="Jméno a příjmení">
+  </div>
+  <div class="del-field-group">
+    <label for="checkoutAddressInput">Adresa doručení</label>
+    <textarea id="checkoutAddressInput" class="ds-input" placeholder="Ulice, číslo, město"></textarea>
+  </div>
+  <div class="del-field-group">
+    <label for="checkoutPscInput">PSČ</label>
+    <input type="text" id="checkoutPscInput" class="ds-input" inputmode="numeric" autocomplete="postal-code" maxlength="5" placeholder="Např. 12000" required>
+  </div>
+  <div class="del-field-group">
+    <label for="checkoutPhoneInput">Telefon</label>
+    <input type="tel" id="checkoutPhoneInput" class="ds-input" placeholder="+420 601 234 567" required>
+  </div>
+  <div class="del-field-group">
+    <label for="checkoutEmailInput">E-mail (nepovinné) — pošleme potvrzení</label>
+    <input type="email" id="checkoutEmailInput" class="ds-input" placeholder="vas@email.cz" autocomplete="email">
+  </div>
+  <div class="del-field-group">
+    <label for="checkoutNoteInput">Poznámka (volitelné)</label>
+    <textarea id="checkoutNoteInput" class="ds-input" placeholder="Např. patro, zvonek, alergie…"></textarea>
+  </div>
+
+  <div class="del-field-group">
+    <label id="paymentMethodLabel">Způsob platby</label>
+    <div class="del-pay-options" id="paymentMethodChoice">
+      <label class="del-pay-option">
+        <input type="radio" name="paymentMethod" value="online_card" checked>
+        <span class="del-pay-option__mark" aria-hidden="true"></span>
+        <span class="del-pay-option__body">
+          <span class="del-pay-option__title">Kartou online</span>
+          <span class="del-pay-option__desc">Zaplatíte hned kartou předem</span>
+        </span>
+      </label>
+      <label class="del-pay-option">
+        <input type="radio" name="paymentMethod" value="cash">
+        <span class="del-pay-option__mark" aria-hidden="true"></span>
+        <span class="del-pay-option__body">
+          <span class="del-pay-option__title">Hotově při doručení</span>
+          <span class="del-pay-option__desc">Zaplatíte řidiči v hotovosti</span>
+        </span>
+      </label>
+      <label class="del-pay-option">
+        <input type="radio" name="paymentMethod" value="card_on_delivery">
+        <span class="del-pay-option__mark" aria-hidden="true"></span>
+        <span class="del-pay-option__body">
+          <span class="del-pay-option__title">Kartou při doručení</span>
+          <span class="del-pay-option__desc">Zaplatíte řidiči platební kartou</span>
+        </span>
+      </label>
+    </div>
+  </div>
+
+  <p class="del-payonline-note" id="checkoutClosedHint" hidden></p>
+  <button type="button" class="ds-btn ds-btn--primary ds-btn--block" id="submitOrderBtn">Odeslat objednávku</button>
+  <p class="del-hint">Po odeslání objednávku uvidí naši řidiči.</p>
+</div>
+
+<!-- ── Order confirmation / online-payment status sheet ── -->
+<div class="ds-sheet__backdrop" id="orderConfirmedBackdrop"></div>
+<div class="ds-sheet" id="orderConfirmedModal" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="orderConfirmedHeading">
+  <div class="ds-sheet__handle"></div>
+  <div class="del-success">
+    <div class="del-success__icon">✓</div>
+    <div class="del-success__title" id="orderConfirmedHeading">Objednávka odeslána</div>
+    <p class="del-success__ref-label">Vaše referenční číslo objednávky:</p>
+    <p class="del-success__ref" id="orderRefText"></p>
+    <p class="del-success__total" id="orderConfirmedTotal"></p>
+    <p class="del-success__note" id="orderConfirmedNote"></p>
+  </div>
+  <div id="orderPaymentStatus"></div>
+  <button type="button" class="ds-btn ds-btn--dark ds-btn--block" id="orderConfirmedCloseBtn">Zavřít</button>
+</div>
+
+<!-- ── Combo customize sheet ("Zvýhodněná menu" — spec:
+     docs/superpowers/specs/2026-07-22-combo-menus-design.md). One shared
+     sheet, its content rebuilt per-combo by renderComboDialogContent() in
+     delivery.js: per-slot swap/remove radio groups, extras checkboxes, a
+     note field and a live-updating total. Confirming pushes ONE new cart
+     line (never merged with an existing one) — see addComboLineToCart(). -->
+<div class="ds-sheet__backdrop" id="comboSheetBackdrop"></div>
+<div class="ds-sheet" id="comboSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="comboSheetTitle">
+  <div class="ds-sheet__handle"></div>
+  <div class="del-sheet-head">
+    <h3 class="del-sheet-title" id="comboSheetTitle">Přizpůsobit menu</h3>
+    <button type="button" class="del-sheet-close" id="comboSheetCloseBtn" aria-label="Zavřít">&times;</button>
+  </div>
+
+  <p class="del-combo-dialog__desc" id="comboDialogDesc"></p>
+
+  <div id="comboSlotsContainer"></div>
+  <div id="comboExtrasContainer"></div>
+
+  <div class="del-field-group">
+    <label for="comboNoteInput">Poznámka (volitelné)</label>
+    <input type="text" id="comboNoteInput" class="ds-input" maxlength="200" placeholder="Např. bez cibule">
+  </div>
+
+  <div class="del-cart-total-row">
+    <span>Cena</span>
+    <span id="comboDialogTotal">0 Kč</span>
+  </div>
+
+  <div class="del-combo-dialog__actions">
+    <button type="button" class="ds-btn ds-btn--ghost" id="comboSheetCancelBtn">Zrušit</button>
+    <button type="button" class="ds-btn ds-btn--primary" id="comboSheetConfirmBtn">Přidat do košíku</button>
+  </div>
+</div>
+
+<!-- ── "Objednat znovu" sheet (spec: docs/superpowers/specs/2026-07-25-
+     reorder-design.md §8). Unlike the checkout/combo sheets above, this
+     one has no static form markup at all — its entire body is rebuilt by
+     delivery.js per state (unverified phone/code form, verified order
+     list, or verified-empty message), because which of those three states
+     applies is only known after GET /reorder/recent answers. -->
+<div class="ds-sheet__backdrop" id="reorderSheetBackdrop"></div>
+<div class="ds-sheet" id="reorderSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="reorderSheetTitle">
+  <div class="ds-sheet__handle"></div>
+  <div class="del-sheet-head">
+    <h3 class="del-sheet-title" id="reorderSheetTitle">Objednat znovu</h3>
+    <button type="button" class="del-sheet-close" id="reorderSheetCloseBtn" aria-label="Zavřít">&times;</button>
+  </div>
+  <div id="reorderSheetContent"></div>
+</div>
+
+<div class="ds-toast" id="toast"></div>
+
+<!-- SECURITY (3rd hardening pass): the inline `window.API_BASE_URL = ...`
+     bootstrap script that used to sit here was dead code — config.js
+     (loaded next) unconditionally overwrites window.API_BASE_URL via
+     autoDetectBackend() regardless of what this set, so it never had any
+     effect. Removed rather than kept as an inline <script>, which lets the
+     CSP's script-src drop 'unsafe-inline' entirely — see configureHelmet()
+     in src/server/server.js. -->
+<script src="/reservation/config.js"></script>
+<script src="/reservation/js/delivery.js"></script>
+</body>
+</html>

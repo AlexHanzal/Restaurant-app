@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ochrana osobních údajů</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/reservation/css/design.css">
+<link rel="stylesheet" href="/reservation/css/legal.css">
+</head>
+<body>
+
+<header class="ds-page-header">
+  <span class="ds-wordmark">Restaurace</span>
+  <div class="ds-page-header__actions">
+    <a class="legal-back-link" href="/reservation/app">‹ Zpět na web</a>
+  </div>
+</header>
+
+<main class="legal-page">
+  <div class="legal-hero">
+    <h1 class="ds-poster">Ochrana osobních údajů.</h1>
+    <span class="legal-updated">Platnost od {{EFFECTIVE_DATE}}</span>
+  </div>
+
+  <section class="legal-section">
+    <h2>1. Správce osobních údajů</h2>
+    <ul class="legal-identity">
+      <li><strong>Název:</strong> {{NAZEV}}</li>
+      <li><strong>IČO:</strong> {{ICO}}</li>
+      <li><strong>DIČ:</strong> {{DIC}}</li>
+      <li><strong>Sídlo / provozovna:</strong> {{ADRESA}}</li>
+      <li><strong>E-mail:</strong> {{EMAIL}}</li>
+      <li><strong>Telefon:</strong> {{TELEFON}}</li>
+    </ul>
+    <p>Správcem osobních údajů zpracovávaných v souvislosti s provozem webové aplikace pro rozvoz jídla a rezervaci
+      stolu (dále jen „aplikace") je výše uvedený Provozovatel. Tento dokument popisuje, jaké osobní údaje
+      Provozovatel zpracovává, za jakým účelem, na jakém právním základě, jak dlouho a jaká máte jako subjekt údajů
+      práva — v souladu s nařízením Evropského parlamentu a Rady (EU) 2016/679 (obecné nařízení o ochraně osobních
+      údajů, „GDPR") a zákonem č. 110/2019 Sb., o zpracování osobních údajů.</p>
+  </section>
+
+  <section class="legal-section">
+    <h2>2. Jaké údaje zpracováváme</h2>
+    <ul>
+      <li><strong>Jméno (případně iniciály):</strong> u rezervace k identifikaci hosta a stolu, u rozvozu jako
+        adresát doručení.</li>
+      <li><strong>Telefonní číslo:</strong> u rezervace k jednorázovému ověření pomocí SMS kódu a k zaslání
+        potvrzovací SMS zprávy o rezervaci; u rozvozu ke kontaktu řidiče se zákazníkem a k odeslání SMS notifikací
+        o stavu objednávky (přijetí, na cestě).</li>
+      <li><strong>Doručovací adresa a poštovní směrovací číslo (PSČ):</strong> výhradně u rozvozu, k doručení
+        objednávky a k ověření, že adresa spadá do rozvozové zóny.</li>
+      <li><strong>E-mailová adresa:</strong> je-li u objednávky rozvozu uvedena, k zaslání potvrzení objednávky
+        a odkazu na účtenku.</li>
+      <li><strong>Údaje o objednávce/rezervaci:</strong> objednané položky, cena, způsob platby, čas a stůl
+        rezervace, stav platby — nezbytné k vyřízení a případné reklamaci objednávky a k vedení účetních dokladů.</li>
+    </ul>
+    <p>Platbu kartou online zpracovává výhradně platební brána GoPay — Provozovatel nemá přístup k číslu platební
+      karty ani k dalším citlivým platebním údajům a v aplikaci je nikde neukládá.</p>
+  </section>
+
+  <section class="legal-section">
+    <h2>3. Účely a právní základy zpracování</h2>
+    <ul>
+      <li><strong>Plnění smlouvy</strong> (čl. 6 odst. 1 písm. b) GDPR) — vyřízení objednávky rozvozu nebo
+        rezervace stolu, komunikace o jejím stavu, doručení, případná reklamace.</li>
+      <li><strong>Oprávněný zájem Provozovatele</strong> (čl. 6 odst. 1 písm. f) GDPR) — ověření telefonního čísla
+        SMS kódem jako ochrana proti zneužívání rezervačního systému (fiktivní/podvodné rezervace), evidence
+        objednávek pro provozní a bezpečnostní účely.</li>
+      <li><strong>Plnění právních povinností</strong> (čl. 6 odst. 1 písm. c) GDPR) — vedení účetních dokladů
+        a jejich uchování po dobu stanovenou zákonem č. 563/1991 Sb., o účetnictví, a daňovými předpisy.</li>
+    </ul>
+    <p>Osobní údaje nejsou používány k automatizovanému rozhodování ani profilování ve smyslu čl. 22 GDPR.</p>
+  </section>
+
+  <section class="legal-section">
+    <h2>4. Příjemci a zpracovatelé osobních údajů</h2>
+    <p>K vyřízení objednávky/rezervace Provozovatel využívá následující zpracovatele, kterým jsou v nezbytném
+      rozsahu předávány osobní údaje výhradně za účelem poskytnutí jejich služby:</p>
+    <ul>
+      <li><strong>Twilio Inc.</strong> — odeslání SMS zpráv (ověřovací kód, potvrzení rezervace, notifikace
+        o stavu objednávky); je mu předáváno telefonní číslo a text zprávy.</li>
+      <li><strong>GoPay s.r.o.</strong> — zpracování online plateb kartou; je mu předávána výše platby a
+        identifikace objednávky, nikoli údaje o platební kartě samotné.</li>
+      <li><strong>Poskytovatel e-mailových služeb (SMTP)</strong> — odeslání potvrzení objednávky a odkazu na
+        účtenku na zadanou e-mailovou adresu.</li>
+      <li><strong>Poskytovatel hostingu / serveru (VPS)</strong> — technické uložení a provoz aplikace a databáze.</li>
+    </ul>
+    <p>Se všemi uvedenými zpracovateli má Provozovatel uzavřen vztah odpovídající požadavkům čl. 28 GDPR, případně
+      jedná podle jejich vlastních standardních smluvních podmínek zpracování dat. Osobní údaje nejsou předávány
+      žádným dalším třetím stranám k marketingovým ani jiným účelům a nejsou předávány mimo Evropskou unii/Evropský
+      hospodářský prostor nad rámec toho, co pro poskytnutí svých služeb vyžadují výše uvedení zpracovatelé.</p>
+  </section>
+
+  <section class="legal-section">
+    <h2>5. Doba uchování údajů</h2>
+    <ul>
+      <li><strong>Objednávky a účtenky/daňové doklady:</strong> uchovávány po dobu vyžadovanou zákonem
+        o účetnictví a daňovými předpisy, tj. zpravidla 5–10 let od konce zdaňovacího období, k němuž se vztahují.</li>
+      <li><strong>Rezervace stolu (bez navazující objednávky/účtenky):</strong> uchovávány pouze krátkodobě po
+        proběhlém termínu rezervace — po nezbytnou dobu k řešení případných reklamací a provozních dotazů, poté
+        jsou smazány nebo anonymizovány.</li>
+      <li><strong>Ověřovací SMS kódy:</strong> platí 5 minut a po ověření nebo vypršení platnosti nejsou dále
+        uchovávány.</li>
+    </ul>
+  </section>
+
+  <section class="legal-section">
+    <h2>6. Cookies a ukládání údajů ve Vašem zařízení</h2>
+    <p>Aplikace ukládá do Vašeho zařízení výhradně technické (nezbytné) údaje potřebné pro její funkci. Níže je
+      jejich úplný seznam včetně účelu a doby uložení:</p>
+    <ul>
+      <li><strong>Přihlašovací cookie personálu</strong> (<code>auth_token</code>, resp. <code>__Host-auth_token</code>)
+        — udržuje přihlášení personálu (obsluha, kuchyň, řidič, administrátor) po dobu směny. Doba uložení:
+        <strong>12 hodin</strong>. Zákazníkům se nenastavuje.</li>
+      <li><strong>Bezpečnostní cookie proti zneužití formulářů</strong> (CSRF token, <code>csrf_token</code>, resp.
+        <code>__Host-csrf_token</code>) — chrání přihlášený personál před podvrženými požadavky z cizích stránek
+        (útok typu CSRF). Nastavuje se <strong>pouze na stránkách pro personál</strong> po přihlášení, nikoli
+        běžným návštěvníkům veřejných stránek. Obsahuje náhodný bezpečnostní řetězec, žádný osobní údaj.
+        Doba uložení: <strong>12 hodin</strong>.</li>
+      <li><strong>Cookie funkce „Objednat znovu"</strong> (<code>reorder_token</code>) — umožňuje zákazníkovi
+        zobrazit své předchozí objednávky a zopakovat je bez opětovného vyplňování. Nastavuje se
+        <strong>až poté, co zákazník sám zadá své telefonní číslo a potvrdí je ověřovacím SMS kódem</strong>;
+        bez tohoto výslovného kroku se neukládá. Obsahuje <strong>telefonní číslo zákazníka</strong> v podobě
+        podepsaného tokenu. Doba uložení: <strong>90 dní</strong>. Kdykoli ji lze odstranit tlačítkem
+        <strong>„Nejsem to já"</strong> přímo v okně „Objednat znovu" (tím se ověření okamžitě zruší), nebo
+        smazáním cookies v nastavení prohlížeče.</li>
+      <li><strong>Úložiště prohlížeče</strong> (localStorage / sessionStorage) — dočasně si pamatuje rozpracovanou
+        platbu nebo rezervaci, aby ji bylo možné dokončit i po obnovení či zavření stránky, a u personálu údaje
+        o přihlášené roli. Neobsahuje žádné sledovací identifikátory a maže se po dokončení platby, resp.
+        zavřením panelu prohlížeče.</li>
+    </ul>
+    <p>Všechny výše uvedené údaje jsou <strong>nezbytné pro poskytnutí služby, kterou jste si vyžádali</strong>, a
+      proto podle § 89 odst. 3 zákona č. 127/2005 Sb., o elektronických komunikacích, nevyžadují Váš souhlas.
+      Neslouží k analytice, sledování chování uživatelů, profilování ani k marketingu.</p>
+    <p>Aplikace <strong>nepoužívá žádné analytické, reklamní ani jiné sledovací cookies</strong> a nenačítá žádné
+      skripty, písma ani jiný obsah třetích stran — z toho důvodu na veřejných stránkách (rozvoz, rezervace) není
+      zobrazován cookie banner, protože není k čemu udělovat souhlas. Pokud si zvolíte platbu kartou online, budete
+      přesměrováni na platební bránu <strong>GoPay</strong> (gate.gopay.cz); ta si na své vlastní doméně nastavuje
+      vlastní cookies nutné pro provedení platby a řídí se vlastními zásadami ochrany osobních údajů, které
+      naleznete na webu společnosti GoPay s.r.o.</p>
+    <p>Uložené cookies můžete kdykoli smazat nebo zcela zakázat v nastavení svého prohlížeče. Upozorňujeme, že
+      zákazem technických cookies přestane fungovat přihlášení personálu, funkce „Objednat znovu" a dokončení
+      online platby.</p>
+  </section>
+
+  <section class="legal-section">
+    <h2>7. Práva subjektu údajů</h2>
+    <p>V souvislosti se zpracováním svých osobních údajů máte právo:</p>
+    <ul>
+      <li>na <strong>přístup</strong> k osobním údajům, které o Vás Provozovatel zpracovává,</li>
+      <li>na <strong>opravu</strong> nepřesných nebo neúplných údajů,</li>
+      <li>na <strong>výmaz</strong> údajů, pokud pominul účel jejich zpracování nebo je zpracování protiprávní
+        (s výjimkou údajů, které je Provozovatel povinen uchovávat ze zákona — viz čl. 5),</li>
+      <li>na <strong>omezení zpracování</strong> za podmínek stanovených GDPR,</li>
+      <li><strong>vznést námitku</strong> proti zpracování založenému na oprávněném zájmu Provozovatele,</li>
+      <li>na <strong>přenositelnost údajů</strong> ve strukturovaném, běžně používaném a strojově čitelném formátu,</li>
+      <li>podat <strong>stížnost u Úřadu pro ochranu osobních údajů</strong> (ÚOOÚ), Pplk. Sochora 27, 170 00
+        Praha 7, <a href="https://www.uoou.cz" target="_blank" rel="noopener">www.uoou.cz</a>, pokud se domníváte,
+        že zpracování Vašich osobních údajů porušuje GDPR.</li>
+    </ul>
+    <p>Svá práva můžete uplatnit na kontaktech uvedených v čl. 1 tohoto dokumentu.</p>
+  </section>
+
+  <section class="legal-section">
+    <h2>8. Zabezpečení údajů</h2>
+    <p>Přístup k osobním údajům v aplikaci je chráněn heslem (ukládaným výhradně v podobě nevratného kryptografického
+      otisku), šifrovaným přenosem dat (HTTPS) a je omezen pouze na personál, který jej nezbytně potřebuje k výkonu
+      své role (obsluha, kuchyň, řidič, administrátor). Odkazy na účtenky jsou tvořeny dostatečně dlouhým
+      neuhodnutelným identifikátorem.</p>
+  </section>
+
+  <div class="legal-warning">
+    Toto je šablona připravená k právní kontrole. Před spuštěním provozu nechte text zkontrolovat právníkem.
+  </div>
+</main>
+
+<footer class="legal-footer">
+  <div class="legal-footer-links">
+    <a href="/reservation/obchodni-podminky">Obchodní podmínky</a>
+    <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
+    <a href="/reservation/reklamace">Reklamační řád</a>
+    <a href="/reservation/app">Zpět na web</a>
+  </div>
+  <div class="legal-footer-business">{{NAZEV}} · IČO: {{ICO}} · {{ADRESA}}</div>
+</footer>
+
+</body>
+</html>
