@@ -46,6 +46,10 @@ const SERVER_CONFIG = {
         // section and priceOrderItems()'s COMBO_ITEM_ID_PREFIX branch
         // further down for the shape/pricing rules.
         combos: "combos",
+        // EET 2.0 — one record per reported sale, keyed by the receipt id so
+        // idempotency comes free from the receipt system. See
+        // docs/superpowers/specs/2026-07-31-eet2-integration-design.md
+        eetRecords: "eet_records",
     },
     serveFrontend: true,
     frontendPath: "src",
@@ -96,6 +100,33 @@ const SERVER_CONFIG = {
         address: process.env.BUSINESS_ADDRESS || "Náměstí Svobody 1, 602 00 Brno",
         vatPayer: process.env.BUSINESS_VAT_PAYER === "true", // default: NOT a VAT payer
     },
+
+    // ── EET 2.0 (elektronická evidence tržeb) ────────────────────────────
+    // Same dev-fallback pattern as Twilio/GoPay above: until EET_ENABLED is
+    // "true" AND both PEM files exist, nothing is transmitted — sales are
+    // logged to the console and their queue records go straight to a
+    // "disabled" state, so `npm start` works with no certificate present.
+    //
+    // The pokladní certifikát arrives from MOJE daně as .p12, which
+    // node:crypto cannot read. Convert once at deploy:
+    //   openssl pkcs12 -in pokladni.p12 -clcerts -nokeys -out secrets/eet-cert.pem
+    //   openssl pkcs12 -in pokladni.p12 -nocerts -nodes  -out secrets/eet-key.pem
+    eet: {
+        enabled: process.env.EET_ENABLED === "true",
+        playground: process.env.EET_PLAYGROUND !== "false", // safe default
+        eic: process.env.EET_EIC || process.env.BUSINESS_DIC || "",
+        idJednotky: process.env.EET_ID_JEDNOTKY || "",
+        certPem: process.env.EET_CERT_PEM || "./secrets/eet-cert.pem",
+        keyPem: process.env.EET_KEY_PEM || "./secrets/eet-key.pem",
+        keyPassphrase: process.env.EET_KEY_PASSPHRASE || "",
+        timeoutMs: Number(process.env.EET_TIMEOUT_MS) || 5000,
+        retryIntervalMs: Number(process.env.EET_RETRY_INTERVAL_MS) || 60000,
+        registers: {
+            delivery: process.env.EET_POKL_DELIVERY || "DELIVERY",
+            indoor: process.env.EET_POKL_INDOOR || "INDOOR",
+            reservation: process.env.EET_POKL_RESERVATION || "RESERVATION",
+        },
+    },
 };
 
 // ============================================================================
@@ -111,6 +142,7 @@ const fs = require("fs").promises; // still used for serving frontend HTML files
 const db = require("./db");
 const minify = require("./minify"); // esbuild minify-on-serve for .js/.css — see minify.js, same design doc §2
 const gopay = require("./gopay");
+const eet = require("./eet");
 const security = require("./security");
 const csrf = require("./csrf"); // CSRF double-submit-cookie protection — see csrf.js
 const V = require("./validation"); // input validation (zod schemas + validate()/validateParams() middleware) — see validation.js
@@ -146,6 +178,26 @@ const {
     verifyToken,
     COOKIE_NAME: AUTH_COOKIE_NAME,
 } = require("./auth");
+
+// Credentials are loaded once, lazily, and cached — reading and parsing PEM on
+// every sale would be pointless I/O on the payment hot path. Returns null when
+// EET is disabled or the certificate is absent, which is the dev-fallback
+// signal every caller checks.
+let eetCredentialsCache;
+function eetCredentials() {
+    if (eetCredentialsCache !== undefined) return eetCredentialsCache;
+    const cfg = SERVER_CONFIG.eet;
+    if (!cfg.enabled) { eetCredentialsCache = null; return null; }
+    try {
+        eetCredentialsCache = eet.loadCredentials(cfg);
+    } catch (e) {
+        // Never crash the server over EET config — sales still get queued and
+        // the health endpoint surfaces the problem.
+        console.error(`❌ EET: certificate could not be loaded (${e.message}) — sales will queue unsent`);
+        eetCredentialsCache = null;
+    }
+    return eetCredentialsCache;
+}
 
 const app = express();
 
@@ -4077,6 +4129,18 @@ async function start() {
 
     if (!notify.isEmailConfigured()) {
         console.warn("⚠️  SMTP not configured (SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM) — confirmation e-mails will be logged to the console instead of actually sent.");
+    }
+
+    // Same dev-fallback logging pattern as Twilio/GoPay/SMTP above. Calling
+    // eetCredentials() here (once, at boot) both surfaces a clear diagnostic
+    // early instead of silently failing on the first sale, and warms the
+    // module-level cache so the payment hot path never touches the
+    // filesystem later. eetCredentials() itself already logs the failure
+    // reason on a bad/missing certificate — nothing to duplicate here.
+    if (!SERVER_CONFIG.eet.enabled) {
+        console.warn("⚠️  EET not enabled (EET_ENABLED=false) — sales will not be reported to the tax authority; see docs/superpowers/specs/2026-07-31-eet2-integration-design.md.");
+    } else if (eetCredentials()) {
+        console.log(`🧾 EET configured — ${SERVER_CONFIG.eet.playground ? "PLAYGROUND" : "PRODUCTION"} (idJednotky ${SERVER_CONFIG.eet.idJednotky})`);
     }
 
     // go-live Task 4 (spec §6): reservation reminder scanner — ticks every 5
