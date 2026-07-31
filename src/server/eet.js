@@ -276,13 +276,47 @@ async function sendTrzba(config, sale) {
     const body = buildTrzbaBody(sale);
     const envelope = buildSignedEnvelope(body, config.credentials);
     const url = config.playground ? PLAYGROUND_URL : PRODUCTION_URL;
+    const timeoutMs = config.timeoutMs || 5000;
 
-    const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: SOAP_ACTION },
-        body: Buffer.from(envelope, "utf8"),
-        signal: AbortSignal.timeout(config.timeoutMs || 5000),
-    });
+    // Tests inject a fake here to exercise this function with no network at
+    // all (a real cash-desk deploy always falls through to global fetch).
+    const doFetch = config.fetchImpl || fetch;
+
+    // Everything that fails BEFORE an HTTP response comes back — a timeout,
+    // a DNS failure, ECONNRESET, a TLS handshake failure — is a transport
+    // problem, not an EET verdict: the server never got to judge the sale.
+    // EET legally requires the sale to be reported within 48 hours, so a
+    // caller that branches on err.retryable MUST see these as retryable, or
+    // a timed-out sale is silently dropped instead of retried. Left
+    // unguarded, AbortSignal.timeout's rejection (and any other fetch
+    // rejection) would propagate with no .retryable at all — only the
+    // manually-built non-2xx error below got the flag. Wrap the whole call
+    // so nothing transport-level can slip through unflagged.
+    let res;
+    try {
+        res = await doFetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "text/xml; charset=utf-8", SOAPAction: SOAP_ACTION },
+            body: Buffer.from(envelope, "utf8"),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    } catch (err) {
+        // AbortSignal.timeout surfaces as a DOMException named "TimeoutError"
+        // (some runtimes instead name it "AbortError" for the same cause)
+        // with a message like "The operation was aborted due to timeout" —
+        // it says nothing about which call it was or how long it waited.
+        // Replace it with a message that does. Any other transport failure
+        // (DNS/ECONNRESET/TLS) keeps its original message untouched; it only
+        // gains the retryable flag.
+        if (err.name === "TimeoutError" || err.name === "AbortError") {
+            const timeoutErr = new Error(`EET: request timed out after ${timeoutMs}ms`);
+            timeoutErr.retryable = true;
+            timeoutErr.cause = err;
+            throw timeoutErr;
+        }
+        err.retryable = true;
+        throw err;
+    }
 
     const text = await res.text();
     if (!res.ok) {
@@ -293,7 +327,16 @@ async function sendTrzba(config, sale) {
 
     const parsed = parseResponse(text);
     return {
-        ok: !!parsed.pok,
+        // A POK means the server confirmed a real sale. But in ověřovací
+        // (verification) mode there IS no sale to confirm — success there is
+        // signalled only by <Chyba kod="0"> with NO Potvrzeni/pok element at
+        // all (confirmed against the real playground service). Code 0 is
+        // reserved for exactly that verification-success case and never
+        // appears in ostrý (production) mode, so treating it as success here
+        // can never mask a real rejection. Without the `errorCode === 0`
+        // branch, verifyConnection — whose entire purpose is to consume
+        // exactly this shape — would report a healthy connection as failed.
+        ok: !!parsed.pok || parsed.errorCode === 0,
         pok: parsed.pok,
         warnings: parsed.warnings,
         errorCode: parsed.errorCode,
