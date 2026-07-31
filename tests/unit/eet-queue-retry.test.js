@@ -21,23 +21,55 @@ function rec(over = {}) {
     };
 }
 
+// lastAttemptAt that puts a record exactly `waitedMs` in the past relative to NOW.
+function agoISO(waitedMs) {
+    return new Date(NOW.getTime() - waitedMs).toISOString();
+}
+
 test("confirmed and failed records are never retried", () => {
     const db = fakeDb([rec({ id: "a", state: "confirmed" }), rec({ id: "b", state: "failed" })]);
     assert.strictEqual(queue.dueRecords(db, "eet", NOW).length, 0);
 });
 
-test("a pending record past its backoff is due", () => {
-    const db = fakeDb([rec()]);   // 60 min since last attempt, backoff for attempts=1 is 5 min
+test("a record past its deadline is still retried, never dropped", () => {
+    const db = fakeDb([rec({ deadlineAt: "2026-07-30T00:00:00Z" })]);
     assert.strictEqual(queue.dueRecords(db, "eet", NOW).length, 1);
 });
 
-test("a pending record still inside its backoff is not due", () => {
-    const db = fakeDb([rec({ lastAttemptAt: "2026-07-31T11:58:00Z" })]);  // 2 min ago
-    assert.strictEqual(queue.dueRecords(db, "eet", NOW).length, 0);
-});
+// ----------------------------------------------------------------------------
+// Backoff schedule: 1min, 5min, 15min, then hourly — indexed by attempts
+// ALREADY MADE (attempts - 1), not by attempts about to be made. A record
+// with attempts=1 has been tried exactly once (that attempt happened when
+// attempts was still 0, then sendOnce incremented it) — the wait that
+// follows THAT attempt is the 1-minute stage, not the 5-minute one.
+// ----------------------------------------------------------------------------
 
-test("a record past its deadline is still retried, never dropped", () => {
-    const db = fakeDb([rec({ deadlineAt: "2026-07-30T00:00:00Z" })]);
+const STAGES = [
+    { attempts: 1, delayMs: 60_000, label: "1 min" },
+    { attempts: 2, delayMs: 300_000, label: "5 min" },
+    { attempts: 3, delayMs: 900_000, label: "15 min" },
+    { attempts: 4, delayMs: 3_600_000, label: "1 hour (first hourly stage)" },
+    { attempts: 10, delayMs: 3_600_000, label: "1 hour (deep into the tail)" },
+];
+
+for (const { attempts, delayMs, label } of STAGES) {
+    test(`attempts=${attempts}: not yet due just before the ${label} mark`, () => {
+        const db = fakeDb([rec({ attempts, lastAttemptAt: agoISO(delayMs - 1000) })]);
+        assert.strictEqual(queue.dueRecords(db, "eet", NOW).length, 0);
+    });
+
+    test(`attempts=${attempts}: due just after the ${label} mark`, () => {
+        const db = fakeDb([rec({ attempts, lastAttemptAt: agoISO(delayMs + 1000) })]);
+        assert.strictEqual(queue.dueRecords(db, "eet", NOW).length, 1);
+    });
+}
+
+test("attempts=0 (never tried) is immediately due regardless of lastAttemptAt", () => {
+    // A record that has never been attempted has lastAttemptAt === null, and
+    // dueRecords() already special-cases that to "due now" — this test pins
+    // that nextAttemptDelay(0) itself doesn't blow up or return something
+    // that would make a never-tried record wait.
+    const db = fakeDb([rec({ attempts: 0, lastAttemptAt: null })]);
     assert.strictEqual(queue.dueRecords(db, "eet", NOW).length, 1);
 });
 
@@ -57,4 +89,28 @@ test("health summary counts by state and finds the oldest pending", () => {
 test("overdue counts pending records past their deadline", () => {
     const db = fakeDb([rec({ id: "a", deadlineAt: "2026-07-30T00:00:00Z" })]);
     assert.strictEqual(queue.healthSummary(db, "eet", NOW).overdue, 1);
+});
+
+// ----------------------------------------------------------------------------
+// oldestPending must sort corrupt records LAST, not first. A missing or
+// unparseable datTrzby must never win "oldest" purely because Date(0)/NaN
+// sorts before a real 2026 timestamp — that would bury the genuinely oldest
+// unreported sale (the one actually closest to its 48h deadline) behind a
+// data-quality bug.
+// ----------------------------------------------------------------------------
+
+test("oldestPending ignores a record with a missing datTrzby", () => {
+    const db = fakeDb([
+        rec({ id: "corrupt", state: "pending", datTrzby: undefined }),
+        rec({ id: "genuine", state: "pending", datTrzby: "2026-07-31T09:00:00Z" }),
+    ]);
+    assert.strictEqual(queue.healthSummary(db, "eet", NOW).oldestPending, "genuine");
+});
+
+test("oldestPending ignores a record with an unparseable datTrzby", () => {
+    const db = fakeDb([
+        rec({ id: "corrupt", state: "pending", datTrzby: "not-a-date" }),
+        rec({ id: "genuine", state: "pending", datTrzby: "2026-07-31T09:00:00Z" }),
+    ]);
+    assert.strictEqual(queue.healthSummary(db, "eet", NOW).oldestPending, "genuine");
 });

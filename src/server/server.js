@@ -4248,7 +4248,41 @@ function reminderScannerTick() {
 // problem loud in the logs before it happens", not a cutoff.
 const ESCALATE_BEFORE_DEADLINE_MS = 6 * 60 * 60 * 1000;
 
+// Cap on how many due records a single tick will send. Each send can take up
+// to several seconds (network round-trip to the tax authority), so an
+// unbounded loop over a large backlog can easily run past this worker's own
+// interval — see eetRetryWorkerInFlight below for why letting that happen
+// unguarded is a compliance bug, not just a performance one. Capping the
+// per-tick batch means a backlog drains across several ticks instead of
+// starving the event loop (or every other request handler) for however long
+// the whole backlog takes to walk.
+const EET_MAX_RECORDS_PER_TICK = 25;
+
+// Re-entrancy guard — this exists to prevent DUPLICATE REPORTING, not merely
+// to keep the tick "tidy". eetRetryWorkerTick is an async function driven by
+// a plain setInterval: setInterval does not wait for the previous callback's
+// promise to settle, so if one tick is still awaiting sendEetForReceipt calls
+// when the interval fires again, a second tick starts concurrently. db.get/
+// db.set round-trip through JSON with no locking, so two overlapping ticks
+// can both db.get() the SAME pending record before either has written back,
+// both compute prvniZaslani from the same stale attempts count, and both
+// call sendTrzba — reporting the same sale to the tax authority twice, and
+// whichever tick's db.set() loses the race clobbers the winner's attempts/
+// lastError with stale data. A tick that finds the guard already held must
+// skip itself entirely rather than, say, processing a smaller batch — any
+// overlap at all reopens the same-record race above.
+let eetRetryWorkerInFlight = false;
+
 async function eetRetryWorkerTick() {
+    if (eetRetryWorkerInFlight) {
+        // Logged (not silent) so a permanently-overrunning scan — e.g. the
+        // tax authority endpoint hanging near the 5s send budget on every
+        // call — shows up in the logs as "still busy" rather than just
+        // quietly never making progress.
+        console.error("EET retry worker: previous tick still running, skipping this one");
+        return;
+    }
+    eetRetryWorkerInFlight = true;
     try {
         // No credentials (EET disabled, or the cert failed to load and is
         // still inside its 60s retry cooldown — see eetCredentials() above)
@@ -4259,7 +4293,18 @@ async function eetRetryWorkerTick() {
         if (!creds) return;
 
         const now = new Date();
-        for (const record of eetQueue.dueRecords(db, COL.eetRecords, now)) {
+        // Oldest sale first: these are the records closest to their 48h
+        // ZoET deadline, so when EET_MAX_RECORDS_PER_TICK forces a backlog
+        // to drain across multiple ticks, the ones nearest to actually
+        // blowing the deadline get first claim on this tick's budget rather
+        // than being processed in whatever order db.list() happens to
+        // return them.
+        const due = eetQueue.dueRecords(db, COL.eetRecords, now)
+            .slice()
+            .sort((a, b) => new Date(a.datTrzby || 0) - new Date(b.datTrzby || 0))
+            .slice(0, EET_MAX_RECORDS_PER_TICK);
+
+        for (const record of due) {
             if (new Date(record.deadlineAt) - now < ESCALATE_BEFORE_DEADLINE_MS) {
                 console.error(
                     `⚠️  EET: receipt ${record.receiptNumber} still unreported, `
@@ -4279,6 +4324,12 @@ async function eetRetryWorkerTick() {
         // unacceptable for the one thing standing between an outage and a
         // dropped legally-reportable sale.
         console.error("EET retry worker tick failed:", e);
+    } finally {
+        // Always released, including on the early-return-for-no-creds path
+        // and on any thrown error above — an exception here must never leave
+        // the guard permanently stuck "in flight", which would silently stop
+        // every future tick from ever running again.
+        eetRetryWorkerInFlight = false;
     }
 }
 

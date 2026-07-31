@@ -40,8 +40,24 @@ function registerFor(config, kind, originalKind) {
     return config.registers[key] || config.registers.indoor;
 }
 
+// Intended schedule, spelled out so an off-by-one can't silently creep back
+// in: after the 1st attempt, wait 1 min; after the 2nd, wait 5 min; after the
+// 3rd, wait 15 min; after the 4th and every one after that, wait an hour.
+// `attempts` here is attempts ALREADY MADE (sendOnce increments it BEFORE
+// sending, so by the time a record is checked for its next due time,
+// `attempts` already reflects the attempt whose backoff we're waiting out) —
+// so the stage is BACKOFF_MS[attempts - 1], not BACKOFF_MS[attempts]. Indexing
+// by attempts directly (the bug this comment replaces) reads the NEXT stage
+// early: after 1 attempt it would wait the 2nd stage's 5 min instead of the
+// 1st stage's 1 min, and every later stage is shifted the same way, so the
+// 1-minute stage never happens at all. attempts === 0 (never tried) has no
+// prior attempt to back off from — dueRecords() already treats that case as
+// immediately due via its `!lastAttemptAt` check, but we still return a safe
+// value here (the first stage) rather than reading BACKOFF_MS[-1].
 function nextAttemptDelay(attempts) {
-    return BACKOFF_MS[attempts] !== undefined ? BACKOFF_MS[attempts] : BACKOFF_TAIL_MS;
+    if (attempts <= 0) return BACKOFF_MS[0];
+    const stage = attempts - 1;
+    return BACKOFF_MS[stage] !== undefined ? BACKOFF_MS[stage] : BACKOFF_TAIL_MS;
 }
 
 // Creates the pending record. Idempotent on receipt.id: calling twice returns
@@ -252,9 +268,22 @@ function healthSummary(db, col, now = new Date()) {
     // Oldest by the sale's own timestamp (datTrzby), not by when we happened
     // to look at it — that's what tells staff how long a sale has actually
     // been unreported, which is the number that matters for the 48h clock.
+    //
+    // A missing or unparseable datTrzby must sort LAST, not first. The naive
+    // `new Date(r.datTrzby || 0)` maps a missing datTrzby to epoch 1970,
+    // which then sorts before every real 2026 timestamp — so a single
+    // corrupt record would permanently masquerade as "the oldest pending
+    // sale" and bury the genuinely oldest one (the one actually closest to
+    // blowing its 48h deadline) out of staff's view. Number.POSITIVE_INFINITY
+    // for the unparseable case guarantees it sorts after every valid date
+    // instead.
+    const trzbyTimeOrInfinity = r => {
+        const t = r.datTrzby ? new Date(r.datTrzby).getTime() : NaN;
+        return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+    };
     const oldest = pending
         .slice()
-        .sort((a, b) => new Date(a.datTrzby || 0) - new Date(b.datTrzby || 0))[0];
+        .sort((a, b) => trzbyTimeOrInfinity(a) - trzbyTimeOrInfinity(b))[0];
     // Last-seen error in list order, not last-seen chronologically — db.list
     // has no ordering guarantee, but for the health snapshot "some recent
     // failure reason" is enough; it exists so staff glancing at /eet/health
