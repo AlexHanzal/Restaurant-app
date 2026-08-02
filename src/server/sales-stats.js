@@ -91,6 +91,12 @@ function collectSales({ orders, timetables, indoorOrders }, fromDate, toDate) {
             paymentMethod: order.paymentMethod || "onsite",
             orderId: order.id,
             items: normaliseItems(order.items, "name"),
+            // Refund analytics (Task 4) reads these. Only delivery orders
+            // carry them today — the route that writes them targets that
+            // channel — so table/indoor sales simply don't have the keys,
+            // which downstream code treats the same as unset.
+            refundReason: order.refundReason || null,
+            refundNote: order.refundNote || null,
         });
     }
 
@@ -367,6 +373,67 @@ function buildSplit(sales, keyFn) {
         .sort((a, b) => b.revenue - a.revenue);
 }
 
+// Refund analytics from the refunded slice of `collectSales()`. `netRevenue`
+// is the period's totals.revenue (already refund-excluded) and is only used
+// to build the rate denominator.
+function buildRefunds(sales, netRevenue) {
+    const refundedSales = sales.filter(sale => sale.refunded);
+
+    let total = 0;
+    const itemCounts = new Map();
+    const reasonCounts = new Map();
+    const orders = [];
+
+    for (const sale of refundedSales) {
+        total += sale.total;
+
+        // Co-occurrence is per refunded order, not per line: an item that
+        // appears twice on the same refunded order still only counts once
+        // toward "how many refunded orders included this item".
+        const namesOnOrder = new Set(sale.items.map(item => item.name));
+        for (const name of namesOnOrder) {
+            itemCounts.set(name, (itemCounts.get(name) || 0) + 1);
+        }
+
+        const reasonRaw = sale.refundReason == null ? "" : String(sale.refundReason).trim();
+        const reasonId = reasonRaw || "none";
+        reasonCounts.set(reasonId, (reasonCounts.get(reasonId) || 0) + 1);
+
+        orders.push({
+            id: sale.orderId,
+            createdAt: sale.at.toISOString(),
+            total: round2(sale.total),
+            itemNames: sale.items.map(item => item.name),
+            reason: reasonRaw || null,
+            note: sale.refundNote || null,
+        });
+    }
+
+    total = round2(total);
+    const count = refundedSales.length;
+    const denominator = netRevenue + total;
+    const rate = denominator > 0 ? round1((total / denominator) * 100) : 0;
+
+    const topItems = [...itemCounts.entries()]
+        .map(([name, itemCount]) => ({ name, count: itemCount }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+    const reasons = [...reasonCounts.entries()]
+        .map(([id, reasonCount]) => ({ id, count: reasonCount }))
+        .sort((a, b) => b.count - a.count);
+
+    // Unlabelled first (so they're easy to triage/clear), then newest first.
+    orders.sort((a, b) => {
+        const aUnlabelled = a.reason === null ? 0 : 1;
+        const bUnlabelled = b.reason === null ? 0 : 1;
+        if (aUnlabelled !== bUnlabelled) return aUnlabelled - bUnlabelled;
+        return Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    });
+
+    return { total, count, rate, topItems, reasons, orders };
+}
+
 function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }) {
     const { since, until, prevSince } = periodBounds(days, now);
 
@@ -391,6 +458,7 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
     const { hour, bestHour } = buildHourPattern(currentSales);
     const channels = buildSplit(currentSales, sale => sale.channel);
     const payments = buildSplit(currentSales, sale => sale.paymentMethod);
+    const refunds = buildRefunds(currentSales, current.revenue);
 
     const deltaOf = (cur, prev) => (prev === 0 || prev === null ? null : round1(((cur - prev) / prev) * 100));
 
@@ -426,7 +494,7 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
             weekday, bestWeekday, hour, bestHour,
             channels, payments,
         },
-        refunds: { total: 0, count: 0, rate: 0, topItems: [], reasons: [], orders: [] },
+        refunds,
     };
 }
 

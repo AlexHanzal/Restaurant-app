@@ -331,3 +331,50 @@ test("bestWeekday is null when there are no sales at all", () => {
     assert.strictEqual(r.patterns.bestWeekday, null);
     assert.strictEqual(r.patterns.bestHour, null);
 });
+
+test("refund totals, rate and per-item co-occurrence", () => {
+    const r = stats.computeSalesStats({
+        orders: [
+            deliveryOrder({ id: "ok", total: 300 }),
+            deliveryOrder({ id: "r1", total: 100, paymentStatus: "refunded",
+                            items: [{ name: "Guláš", qty: 1, price: 100 }],
+                            refundReason: "late" }),
+        ],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.refunds.total, 100);
+    assert.strictEqual(r.refunds.count, 1);
+    assert.strictEqual(r.refunds.rate, 25); // 100 of 400 gross
+    assert.deepStrictEqual(r.refunds.topItems, [{ name: "Guláš", count: 1 }]);
+    assert.deepStrictEqual(r.refunds.reasons, [{ id: "late", count: 1 }]);
+});
+
+test("unlabelled refunds are reported as 'none', not dropped", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ id: "r1", paymentStatus: "refunded" })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.deepStrictEqual(r.refunds.reasons, [{ id: "none", count: 1 }]);
+    assert.strictEqual(r.refunds.orders[0].reason, null);
+});
+
+test("refunds.orders carries what the UI needs to label them", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ id: "r1", paymentStatus: "refunded", total: 250 })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    const o = r.refunds.orders[0];
+    assert.strictEqual(o.id, "r1");
+    assert.strictEqual(o.total, 250);
+    assert.deepStrictEqual(o.itemNames, ["Guláš"]);
+});
+
+test("no refunds yields zeroes and empty lists, and rate 0 not NaN", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder()], timetables: [], indoorOrders: [],
+        menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.refunds.total, 0);
+    assert.strictEqual(r.refunds.rate, 0);
+    assert.deepStrictEqual(r.refunds.topItems, []);
+});
