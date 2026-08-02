@@ -2368,3 +2368,260 @@ button.inn-status-pill.paid:hover { background: var(--ok); color: #fff; }
 .inn-stat-kpi-delta.down { color: var(--danger); }
 
 .inn-stat-error { color: var(--danger); margin-bottom: 12px; }
+
+/* ── Task 9: rankings / never-sold / patterns / refunds / item table ────
+   Same discipline as the block above: --rule 1px edges, --radius, --line
+   for internal dividers, no shadows, no new literal colors. Accent stays
+   scarce — revenue figure, active tab underline, chart bars ONLY (spec
+   §4); every bar/fill added below uses --line or --muted instead. */
+
+/* Generic bordered panel reused by every block below, so the screen reads
+   as one family of cards with the chart card / KPI tiles above. */
+.inn-stat-panel {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    margin-bottom: 24px;
+}
+.inn-stat-panel-title {
+    margin-bottom: 14px;
+    color: var(--ink);
+    font-size: 1em;
+    font-weight: 700;
+}
+.inn-stat-subtitle {
+    margin: 20px 0 6px;
+    color: var(--ink);
+    font-size: 0.85em;
+    font-weight: 700;
+}
+.inn-stat-note {
+    margin: 0 0 12px;
+    color: var(--muted);
+    font-size: 0.78em;
+    line-height: 1.5;
+}
+.inn-stat-empty {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.85em;
+}
+
+/* Scope note under the view header (go-live follow-up fix). */
+.inn-stat-scope-note {
+    margin: -8px 0 20px;
+    color: var(--muted);
+    font-size: 0.82em;
+}
+
+/* Ranking cards — three side by side, collapsing to two under 1100px. */
+.inn-stat-rankings-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.inn-stat-rank-card { margin-bottom: 0; }
+
+/* Shared rank list — ranking cards AND the refunds co-occurrence list. Each
+   row carries a thin proportional bar BEHIND its text, scaled to that
+   list's own max. The bar fill is --line, never --accent. */
+.inn-stat-rank-list { display: flex; flex-direction: column; }
+.inn-stat-rank-row {
+    position: relative;
+    border-bottom: 1px solid var(--line);
+}
+.inn-stat-rank-row:last-child { border-bottom: none; }
+.inn-stat-rank-bar {
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    background: var(--line);
+    z-index: 0;
+}
+.inn-stat-rank-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 8px 4px;
+}
+.inn-stat-rank-num {
+    flex: 0 0 auto;
+    min-width: 1.4em;
+    color: var(--muted);
+    font-size: 0.78em;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-rank-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--ink);
+    font-size: 0.88em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.inn-stat-rank-value {
+    flex: 0 0 auto;
+    color: var(--ink);
+    font-weight: 700;
+    font-size: 0.88em;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Never-sold — grouped by menu category, flush-left columns. */
+.inn-stat-never-sold-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 20px;
+}
+.inn-stat-never-sold-cat {
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 0.68em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.inn-stat-never-sold-items {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.inn-stat-never-sold-items li {
+    padding: 5px 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink);
+    font-size: 0.85em;
+}
+.inn-stat-never-sold-items li:last-child { border-bottom: none; }
+
+/* Patterns — one card, four blocks: day / hour / channel split / payment
+   split. Same collapse threshold as the KPI row and ranking cards. */
+.inn-stat-patterns-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 24px;
+}
+.inn-stat-pattern-label {
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 0.68em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.inn-stat-pattern-value {
+    color: var(--ink);
+    font-size: 1.4em;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-split-rows { display: flex; flex-direction: column; gap: 12px; }
+.inn-stat-split-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.inn-stat-split-name {
+    color: var(--ink);
+    font-size: 0.82em;
+    font-weight: 600;
+}
+.inn-stat-split-value {
+    color: var(--muted);
+    font-size: 0.78em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.inn-stat-split-rail {
+    height: 6px;
+    background: var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.inn-stat-split-fill {
+    height: 100%;
+    background: var(--muted);
+}
+.inn-stat-split-note {
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 0.72em;
+    line-height: 1.4;
+}
+
+/* Refunds. */
+.inn-stat-refund-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 8px;
+}
+.inn-stat-refund-stat-label {
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 0.68em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.inn-stat-refund-stat-value {
+    color: var(--ink);
+    font-size: 1.3em;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-reasons-list { display: flex; flex-direction: column; }
+.inn-stat-reason-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+}
+.inn-stat-reason-row:last-child { border-bottom: none; }
+.inn-stat-reason-label { color: var(--ink); font-size: 0.85em; }
+.inn-stat-reason-count {
+    color: var(--ink);
+    font-weight: 700;
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+}
+
+.inn-stat-refund-select,
+.inn-stat-refund-note {
+    width: 100%;
+    min-width: 140px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+    background: var(--panel);
+    color: var(--ink);
+    font-family: var(--ds-font);
+    font-size: 0.82em;
+}
+.inn-stat-refund-select:disabled,
+.inn-stat-refund-note:disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+}
+.inn-stat-refund-select:focus-visible,
+.inn-stat-refund-note:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* Layout: collapse to two columns under 1100px, matching the KPI row and
+   ranking cards. Admin targets 1024px and wider — nothing below 900px is
+   tuned further. */
+@media (max-width: 1100px) {
+    .inn-stat-kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .inn-stat-rankings-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .inn-stat-patterns-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .inn-stat-refund-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
