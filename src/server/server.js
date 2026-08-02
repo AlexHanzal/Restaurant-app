@@ -154,6 +154,7 @@ const csrf = require("./csrf"); // CSRF double-submit-cookie protection — see 
 const idempotency = require("./idempotency"); // replay protection for the offline POS queue — see idempotency.js
 const offlineSaleRules = require("./offline-sale"); // paidAt clamping + client-snapshot pricing — see offline-sale.js
 const V = require("./validation"); // input validation (zod schemas + validate()/validateParams() middleware) — see validation.js
+const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/sales — see sales-stats.js
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
 // One-tap "Objednat znovu" (reorder) — docs/superpowers/specs/2026-07-25-
@@ -2207,44 +2208,6 @@ function buildZipEntriesForCollection(collection, zipFolderName, idField = "id")
         name: `${zipFolderName}/${obj[idField] || generateFileId()}.json`,
         content: Buffer.from(JSON.stringify(obj, null, 2), "utf8"),
     }));
-}
-
-// Pulls the food-order events out of a timetable's booking grid — unchanged.
-function collectTableOrderEvents(timetableData, sinceDate) {
-    const events = [];
-    const dataObj = (timetableData && timetableData.data) || {};
-
-    for (const dateStr of Object.keys(dataObj)) {
-        const d = new Date(`${dateStr}T00:00:00`);
-        if (isNaN(d.getTime()) || d < sinceDate) continue;
-
-        const dayArray = dataObj[dateStr] || [];
-        for (let dayIndex = 0; dayIndex < dayArray.length; dayIndex++) {
-            const hoursObj = dayArray[dayIndex];
-            if (!hoursObj) continue;
-
-            const hourKeys = Object.keys(hoursObj)
-                .map(Number)
-                .filter(h => !isNaN(h))
-                .sort((a, b) => a - b);
-
-            let prevSignature = null;
-            for (const h of hourKeys) {
-                const slot = hoursObj[h];
-                if (!slot || !Array.isArray(slot.order) || slot.order.length === 0) {
-                    prevSignature = null;
-                    continue;
-                }
-                const signature = JSON.stringify(slot.order) + "|" + slot.orderTotal;
-                if (signature !== prevSignature) {
-                    events.push({ date: dateStr, order: slot.order, orderTotal: slot.orderTotal });
-                }
-                prevSignature = signature;
-            }
-        }
-    }
-
-    return events;
 }
 
 // Same idea, for the kitchen board — unchanged.
@@ -4390,49 +4353,25 @@ function setupAPIRoutes() {
     // to all staff — the client-side view gate in src/js/inner.js admin-locks
     // users/settings/dailyMenu/layout but not stats, and tightening this to
     // admin here would break the panel for ordinary staff.
+    //
+    // `days` is now allowlisted to ALLOWED_STATS_DAYS instead of an unbounded
+    // parseInt, closing the ?days=99999 hole described above.
+    const ALLOWED_STATS_DAYS = [1, 7, 30, 90];
+
     app.get(`${api}/stats/sales`, requireAuth, (req, res) => {
         try {
-            const days = Math.max(1, parseInt(req.query.days, 10) || 30);
-            const since = new Date();
-            since.setDate(since.getDate() - days);
-            since.setHours(0, 0, 0, 0);
-
-            const itemStats = {};
-            const addItem = (name, qty, price) => {
-                const cleanName = (name || "").trim();
-                if (!cleanName) return;
-                const q = Number(qty) || 0;
-                if (!itemStats[cleanName]) itemStats[cleanName] = { count: 0, revenue: 0 };
-                itemStats[cleanName].count += q;
-                itemStats[cleanName].revenue += (Number(price) || 0) * q;
-            };
-
-            // 1) Delivery orders
-            for (const order of db.list(COL.orders)) {
-                const created = new Date(order.createdAt);
-                if (isNaN(created.getTime()) || created < since) continue;
-                for (const item of order.items || []) addItem(item.name, item.qty, item.price);
+            const days = parseInt(req.query.days, 10);
+            if (!ALLOWED_STATS_DAYS.includes(days)) {
+                return res.status(400).json({ error: "Neplatné období" });
             }
-
-            // 2) Table-reservation food orders
-            for (const data of db.list(COL.timetables)) {
-                for (const ev of collectTableOrderEvents(data, since)) {
-                    for (const item of ev.order || []) addItem(item.item, item.qty, item.price);
-                }
-            }
-
-            // 3) Walk-in indoor orders
-            for (const order of db.list(COL.indoorOrders)) {
-                const created = new Date(order.createdAt);
-                if (isNaN(created.getTime()) || created < since) continue;
-                for (const item of order.items || []) addItem(item.item, item.qty, item.price);
-            }
-
-            const items = Object.entries(itemStats)
-                .map(([name, s]) => ({ name, count: s.count, revenue: Math.round(s.revenue * 100) / 100 }))
-                .sort((a, b) => b.count - a.count);
-
-            res.json({ days, since: since.toISOString(), items });
+            res.json(salesStats.computeSalesStats({
+                orders: db.list(COL.orders),
+                timetables: db.list(COL.timetables),
+                indoorOrders: db.list(COL.indoorOrders),
+                menu: db.get(COL.menu, MENU_SINGLETON_ID) || {},
+                days,
+                now: new Date(),
+            }));
         } catch (e) {
             console.error("Sales stats failed:", e);
             res.status(500).json({ error: "Failed to compute sales stats" });
