@@ -137,17 +137,31 @@ test("items come back sorted by count descending", () => {
     assert.deepStrictEqual(r.items.map(i => i.name), ["Hodně", "Středně", "Málo"]);
 });
 
-test("the returned object has every contract key, with the correct stub shapes", () => {
+// Written against Task 1's empty stubs; Task 3 makes `chart` and
+// `patterns.weekday` unconditionally populated (zero-filled buckets, and
+// one weekday entry per weekday that occurs in the window) even when there
+// is no data, so those two are asserted on real shape here instead of `[]`.
+// The other keys stay genuinely empty with no sales, so this still doubles
+// as a "no sales" contract-shape check for them.
+test("the returned object has every contract key, with the correct shapes for an empty period", () => {
     const r = stats.computeSalesStats({
         orders: [], timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
     });
-    assert.deepStrictEqual(r.chart, { unit: "day", buckets: [] });
+    assert.strictEqual(r.chart.unit, "day");
+    assert.deepStrictEqual(r.chart.buckets.map(b => b.key), [
+        "2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30",
+        "2026-07-31", "2026-08-01", "2026-08-02",
+    ]);
+    assert.strictEqual(r.chart.buckets.every(b => b.revenue === 0), true);
     assert.deepStrictEqual(r.rankings, { topByCount: [], bottomByCount: [], topByRevenue: [] });
     assert.deepStrictEqual(r.neverSold, []);
-    assert.deepStrictEqual(r.patterns, {
-        weekday: [], bestWeekday: null, hour: [], bestHour: null,
-        channels: [], payments: [],
-    });
+    assert.strictEqual(r.patterns.weekday.length, 7, "every weekday occurs once in a 7-day window");
+    assert.strictEqual(r.patterns.weekday.every(w => w.revenue === 0 && w.occurrences === 1), true);
+    assert.strictEqual(r.patterns.bestWeekday, null, "no revenue anywhere -> no best weekday");
+    assert.deepStrictEqual(r.patterns.hour, []);
+    assert.strictEqual(r.patterns.bestHour, null);
+    assert.deepStrictEqual(r.patterns.channels, []);
+    assert.deepStrictEqual(r.patterns.payments, []);
     assert.deepStrictEqual(r.refunds, {
         total: 0, count: 0, rate: 0, topItems: [], reasons: [], orders: [],
     });
@@ -225,4 +239,95 @@ test("everything sold means neverSold is empty, not missing", () => {
         timetables: [], indoorOrders: [], menu: MENU, days: 7, now: NOW,
     });
     assert.deepStrictEqual(r.neverSold, []);
+});
+
+test("chart buckets one entry per day, zero-filled, oldest first", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ createdAt: at(2026, 7, 2), total: 300 })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.chart.unit, "day");
+    assert.strictEqual(r.chart.buckets.length, 7);
+    assert.strictEqual(r.chart.buckets[0].key, "2026-07-27");
+    assert.strictEqual(r.chart.buckets[6].key, "2026-08-02");
+    assert.strictEqual(r.chart.buckets[6].revenue, 300);
+    assert.strictEqual(r.chart.buckets[0].revenue, 0);
+});
+
+test("Dnes buckets by hour — 24 slots", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ createdAt: at(2026, 7, 2, 13), total: 300 })],
+        timetables: [], indoorOrders: [], menu: {}, days: 1, now: NOW,
+    });
+    assert.strictEqual(r.chart.unit, "hour");
+    assert.strictEqual(r.chart.buckets.length, 24);
+    assert.strictEqual(r.chart.buckets[13].revenue, 300);
+});
+
+test("refunded orders are absent from the chart", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ paymentStatus: "refunded" })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.chart.buckets.every(b => b.revenue === 0), true);
+});
+
+test("channel split covers all three channels and shares sum to 100", () => {
+    const timetable = { data: { "2026-08-01": [ { 12: {
+        order: [{ item: "Guláš", qty: 1, price: 100 }], orderTotal: 100, isPaid: true,
+    } } ] } };
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ total: 300 })],
+        timetables: [timetable],
+        indoorOrders: [{ id: "i1", createdAt: at(2026, 7, 2), total: 100,
+                         items: [{ item: "Kofola", qty: 1, price: 100 }] }],
+        menu: {}, days: 7, now: NOW,
+    });
+    const by = Object.fromEntries(r.patterns.channels.map(c => [c.id, c.revenue]));
+    assert.strictEqual(by.delivery, 300);
+    assert.strictEqual(by.table, 100);
+    assert.strictEqual(by.indoor, 100);
+    const total = r.patterns.channels.reduce((s, c) => s + c.share, 0);
+    assert.ok(Math.abs(total - 100) < 0.1, `shares summed to ${total}`);
+});
+
+test("a reservation slot contributes its booked hour to the hour pattern", () => {
+    const timetable = { data: { "2026-08-01": [ { 19: {
+        order: [{ item: "Guláš", qty: 1, price: 100 }], orderTotal: 100, isPaid: true,
+    } } ] } };
+    const r = stats.computeSalesStats({
+        orders: [], timetables: [timetable], indoorOrders: [],
+        menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.patterns.bestHour, 19);
+});
+
+test("a repeated reservation slot is counted once, not once per hour", () => {
+    const slot = { order: [{ item: "Guláš", qty: 1, price: 100 }], orderTotal: 100 };
+    const timetable = { data: { "2026-08-01": [ { 18: slot, 19: { ...slot } } ] } };
+    const r = stats.computeSalesStats({
+        orders: [], timetables: [timetable], indoorOrders: [],
+        menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.totals.orders, 1, "same order spanning two hours is one sale");
+});
+
+test("payment split gives unrecorded methods their own onsite slice", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ paymentMethod: "cash", total: 100 })],
+        timetables: [], indoorOrders: [
+            { id: "i1", createdAt: at(2026, 7, 2), total: 100, items: [] }],
+        menu: {}, days: 7, now: NOW,
+    });
+    const by = Object.fromEntries(r.patterns.payments.map(p => [p.id, p.revenue]));
+    assert.strictEqual(by.cash, 100);
+    assert.strictEqual(by.onsite, 100);
+});
+
+test("bestWeekday is null when there are no sales at all", () => {
+    const r = stats.computeSalesStats({
+        orders: [], timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.patterns.bestWeekday, null);
+    assert.strictEqual(r.patterns.bestHour, null);
 });

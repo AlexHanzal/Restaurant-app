@@ -233,6 +233,140 @@ function buildNeverSold(menu, soldNames) {
     return groups;
 }
 
+// Local YYYY-MM-DD from a Date's *local* parts — never toISOString(), which
+// shifts across midnight outside UTC and would file an evening sale under
+// the wrong day.
+function localDayKey(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+}
+
+// One local-midnight Date per calendar day from `since` to `until`
+// inclusive (both truncated to their local day). Used to zero-fill the day
+// chart and to count how many times each weekday occurs in the window.
+function eachLocalDay(since, until) {
+    const days = [];
+    const cursor = new Date(since.getFullYear(), since.getMonth(), since.getDate());
+    const end = new Date(until.getFullYear(), until.getMonth(), until.getDate());
+    while (cursor <= end) {
+        days.push(new Date(cursor));
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return days;
+}
+
+// Revenue chart: hourly (24 zero-filled slots) for a 1-day window, daily
+// (one zero-filled bucket per calendar day, oldest first) otherwise.
+// Refunded sales are excluded — this is a money view.
+function buildChart(days, since, until, sales) {
+    const unit = days === 1 ? "hour" : "day";
+    let buckets;
+    if (unit === "hour") {
+        buckets = Array.from({ length: 24 }, (_, h) => ({ key: String(h).padStart(2, "0"), revenue: 0 }));
+        for (const sale of sales) {
+            if (sale.refunded) continue;
+            buckets[sale.at.getHours()].revenue += sale.total;
+        }
+    } else {
+        const map = new Map();
+        for (const day of eachLocalDay(since, until)) {
+            const key = localDayKey(day);
+            map.set(key, { key, revenue: 0 });
+        }
+        for (const sale of sales) {
+            if (sale.refunded) continue;
+            const bucket = map.get(localDayKey(sale.at));
+            if (bucket) bucket.revenue += sale.total;
+        }
+        buckets = [...map.values()];
+    }
+    for (const bucket of buckets) bucket.revenue = round2(bucket.revenue);
+    return { unit, buckets };
+}
+
+// Non-refunded revenue by weekday (`at.getDay()`), alongside how many times
+// that weekday actually occurred in [since, until] — needed to rank
+// weekdays by *average* revenue, not raw total, so a 7-day window doesn't
+// automatically favour whichever weekday shows up twice. Only weekdays that
+// occur in the window are emitted; bestWeekday stays null with no revenue.
+function buildWeekdayPattern(sales, since, until) {
+    const occurrences = new Array(7).fill(0);
+    for (const day of eachLocalDay(since, until)) occurrences[day.getDay()] += 1;
+
+    const revenueByDay = new Array(7).fill(0);
+    for (const sale of sales) {
+        if (sale.refunded) continue;
+        revenueByDay[sale.at.getDay()] += sale.total;
+    }
+
+    const weekday = [];
+    let bestWeekday = null;
+    let bestAvg = -Infinity;
+    for (let d = 0; d < 7; d++) {
+        if (occurrences[d] === 0) continue;
+        const revenue = round2(revenueByDay[d]);
+        weekday.push({ id: d, revenue, occurrences: occurrences[d] });
+        if (revenue > 0) {
+            const avg = revenue / occurrences[d];
+            if (avg > bestAvg) {
+                bestAvg = avg;
+                bestWeekday = d;
+            }
+        }
+    }
+    return { weekday, bestWeekday };
+}
+
+// Non-refunded revenue by hour of day. Unlike weekday, only hours that
+// actually received a sale are emitted — there is no "occurrences" concept
+// to average over, an hour either sold something in the window or it did
+// not.
+function buildHourPattern(sales) {
+    const map = new Map();
+    for (const sale of sales) {
+        if (sale.refunded) continue;
+        const h = sale.at.getHours();
+        map.set(h, (map.get(h) || 0) + sale.total);
+    }
+    const hour = [...map.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([id, revenue]) => ({ id, revenue: round2(revenue) }));
+
+    let bestHour = null;
+    let bestRevenue = -Infinity;
+    for (const entry of hour) {
+        if (entry.revenue > bestRevenue) {
+            bestRevenue = entry.revenue;
+            bestHour = entry.id;
+        }
+    }
+    return { hour, bestHour };
+}
+
+// Non-refunded revenue split by an arbitrary key (channel or payment
+// method), each with its percent share of the period's non-refunded
+// revenue. Emits only ids that actually have revenue, sorted highest first;
+// share is 0 (not NaN) when there is no revenue at all.
+function buildSplit(sales, keyFn) {
+    const map = new Map();
+    let totalRevenue = 0;
+    for (const sale of sales) {
+        if (sale.refunded) continue;
+        const id = keyFn(sale);
+        map.set(id, (map.get(id) || 0) + sale.total);
+        totalRevenue += sale.total;
+    }
+    return [...map.entries()]
+        .map(([id, revenue]) => ({
+            id,
+            revenue: round2(revenue),
+            share: totalRevenue > 0 ? round1((revenue / totalRevenue) * 100) : 0,
+        }))
+        .sort((a, b) => b.revenue - a.revenue);
+}
+
 function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }) {
     const { since, until, prevSince } = periodBounds(days, now);
 
@@ -251,6 +385,12 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
     const rankings = buildRankings(items);
     const soldNames = new Set(current.itemsByName.keys());
     const neverSold = buildNeverSold(menu, soldNames);
+
+    const chart = buildChart(days, since, until, currentSales);
+    const { weekday, bestWeekday } = buildWeekdayPattern(currentSales, since, until);
+    const { hour, bestHour } = buildHourPattern(currentSales);
+    const channels = buildSplit(currentSales, sale => sale.channel);
+    const payments = buildSplit(currentSales, sale => sale.paymentMethod);
 
     const deltaOf = (cur, prev) => (prev === 0 || prev === null ? null : round1(((cur - prev) / prev) * 100));
 
@@ -279,12 +419,12 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
         items,
         // Filled in by later tasks — kept here now so the contract shape is
         // stable from the start.
-        chart: { unit: days === 1 ? "hour" : "day", buckets: [] },
+        chart,
         rankings,
         neverSold,
         patterns: {
-            weekday: [], bestWeekday: null, hour: [], bestHour: null,
-            channels: [], payments: [],
+            weekday, bestWeekday, hour, bestHour,
+            channels, payments,
         },
         refunds: { total: 0, count: 0, rate: 0, topItems: [], reasons: [], orders: [] },
     };
