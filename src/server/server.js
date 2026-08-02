@@ -2619,7 +2619,7 @@ function setupMiddleware() {
     const SW_SHELL_FILES = [
         ["html", "inner.html"], ["css", "design.css"], ["css", "floorplan.css"], ["css", "inner.css"],
         ["config.js"], ["js", "qr.js"], ["js", "floorplan.js"], ["js", "pos-db.js"], ["js", "pos-sync.js"],
-        ["js", "inner.js"], ["sw.js"],
+        ["js", "inner.js"], ["js", "sales-stats-view.js"], ["sw.js"],
     ];
 
     async function computeShellVersion() {

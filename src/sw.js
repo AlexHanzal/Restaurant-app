@@ -30,6 +30,7 @@ const SHELL_ASSETS = [
     `${BASE}/js/pos-db.js`,
     `${BASE}/js/pos-sync.js`,
     `${BASE}/js/inner.js`,
+    `${BASE}/js/sales-stats-view.js`,
     `${BASE}/manifest.json`,
 ];
 

@@ -882,6 +882,17 @@ async function renderSalesView() {
     header.innerHTML = '<h2>Prodeje</h2>';
     container.appendChild(header);
 
+    // Scope note: which sales this whole screen counts. Restores a note an
+    // earlier task dropped that named only two of the three channels
+    // (rozvoz + rezervace stolu) and silently omitted walk-in/indoor sales —
+    // wrong, because every figure on this screen already includes all three;
+    // see collectSales() in src/server/sales-stats.js for the source of
+    // truth ("delivery", "table", "indoor").
+    const scopeNote = document.createElement('p');
+    scopeNote.className = 'inn-stat-scope-note';
+    scopeNote.textContent = 'Zahrnuje jídlo objednané k rozvozu, k rezervaci stolu i prodej na místě.';
+    container.appendChild(scopeNote);
+
     container.appendChild(buildPeriodSwitcher());
     container.appendChild(buildChartCard(data));
     container.appendChild(buildKpiRow(data));
