@@ -200,6 +200,39 @@ function sumTotals(sales) {
     };
 }
 
+// From the aggregated item map (already sorted by count desc — see `items`
+// in computeSalesStats), split into the three ranking views the "Prodeje"
+// screen shows. All three cap at 5 entries.
+function buildRankings(items) {
+    const topByCount = items.slice(0, 5);
+    const bottomByCount = items
+        .filter(item => item.count > 0)
+        .sort((a, b) => a.count - b.count)
+        .slice(0, 5);
+    const topByRevenue = [...items].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+    return { topByCount, bottomByCount, topByRevenue };
+}
+
+// Menu items whose (trimmed) name never appears in `soldNames`, grouped by
+// their menu category. Skips non-array category values and blank names
+// defensively, and drops categories that end up empty.
+function buildNeverSold(menu, soldNames) {
+    const groups = [];
+    for (const category of Object.keys(menu || {})) {
+        const rawList = menu[category];
+        if (!Array.isArray(rawList)) continue;
+        const names = [];
+        for (const entry of rawList) {
+            if (!entry) continue;
+            const name = String(entry.name == null ? "" : entry.name).trim();
+            if (!name) continue;
+            if (!soldNames.has(name)) names.push(name);
+        }
+        if (names.length) groups.push({ category, items: names });
+    }
+    return groups;
+}
+
 function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }) {
     const { since, until, prevSince } = periodBounds(days, now);
 
@@ -214,6 +247,10 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
     const items = [...current.itemsByName.values()]
         .map(entry => ({ name: entry.name, count: entry.count, revenue: round2(entry.revenue) }))
         .sort((a, b) => b.count - a.count);
+
+    const rankings = buildRankings(items);
+    const soldNames = new Set(current.itemsByName.keys());
+    const neverSold = buildNeverSold(menu, soldNames);
 
     const deltaOf = (cur, prev) => (prev === 0 || prev === null ? null : round1(((cur - prev) / prev) * 100));
 
@@ -243,8 +280,8 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
         // Filled in by later tasks — kept here now so the contract shape is
         // stable from the start.
         chart: { unit: days === 1 ? "hour" : "day", buckets: [] },
-        rankings: { topByCount: [], bottomByCount: [], topByRevenue: [] },
-        neverSold: [],
+        rankings,
+        neverSold,
         patterns: {
             weekday: [], bestWeekday: null, hour: [], bestHour: null,
             channels: [], payments: [],

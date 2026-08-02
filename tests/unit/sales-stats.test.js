@@ -169,3 +169,60 @@ test("since and until are ISO strings on the computeSalesStats return", () => {
     assert.ok(!Number.isNaN(Date.parse(r.since)), "since must parse as a valid date");
     assert.ok(!Number.isNaN(Date.parse(r.until)), "until must parse as a valid date");
 });
+
+const MENU = {
+    main:     [{ name: "Guláš", price: 120 }, { name: "Svíčková", price: 180 }],
+    drinks:   [{ name: " Kofola ", price: 40 }],
+    desserts: [{ name: "Štrúdl", price: 60 }],
+};
+
+const sold = (name, qty, price) => deliveryOrder({
+    id: `o-${name}`, items: [{ name, qty, price }], total: qty * price,
+});
+
+test("rankings split most-sold from highest-earning", () => {
+    const r = stats.computeSalesStats({
+        orders: [sold("Kofola", 20, 40), sold("Svíčková", 3, 180)],
+        timetables: [], indoorOrders: [], menu: MENU, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.rankings.topByCount[0].name, "Kofola");
+    assert.strictEqual(r.rankings.topByRevenue[0].name, "Kofola"); // 800 vs 540
+    assert.strictEqual(r.rankings.bottomByCount[0].name, "Svíčková");
+});
+
+test("bottomByCount never includes an item that sold zero times", () => {
+    const r = stats.computeSalesStats({
+        orders: [sold("Guláš", 1, 120)], timetables: [], indoorOrders: [],
+        menu: MENU, days: 7, now: NOW,
+    });
+    assert.deepStrictEqual(r.rankings.bottomByCount.map(i => i.name), ["Guláš"]);
+});
+
+test("neverSold lists menu items with no sales, grouped by category", () => {
+    const r = stats.computeSalesStats({
+        orders: [sold("Guláš", 1, 120)], timetables: [], indoorOrders: [],
+        menu: MENU, days: 7, now: NOW,
+    });
+    const byCat = Object.fromEntries(r.neverSold.map(g => [g.category, g.items]));
+    assert.deepStrictEqual(byCat.main, ["Svíčková"]);
+    assert.deepStrictEqual(byCat.desserts, ["Štrúdl"]);
+    assert.deepStrictEqual(byCat.drinks, ["Kofola"], "names are emitted trimmed");
+});
+
+test("neverSold matches on trimmed names — whitespace is not a different dish", () => {
+    const r = stats.computeSalesStats({
+        orders: [sold("Kofola", 2, 40)], timetables: [], indoorOrders: [],
+        menu: MENU, days: 7, now: NOW,   // menu has " Kofola " with spaces
+    });
+    const drinks = r.neverSold.find(g => g.category === "drinks");
+    assert.strictEqual(drinks, undefined, "sold Kofola must not appear as never-sold");
+});
+
+test("everything sold means neverSold is empty, not missing", () => {
+    const r = stats.computeSalesStats({
+        orders: [sold("Guláš", 1, 120), sold("Svíčková", 1, 180),
+                 sold("Kofola", 1, 40), sold("Štrúdl", 1, 60)],
+        timetables: [], indoorOrders: [], menu: MENU, days: 7, now: NOW,
+    });
+    assert.deepStrictEqual(r.neverSold, []);
+});
