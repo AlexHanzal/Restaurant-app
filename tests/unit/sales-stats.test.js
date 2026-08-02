@@ -101,3 +101,71 @@ test("deltas compare against the previous equal period", () => {
     assert.strictEqual(r.previous.revenue, 200);
     assert.strictEqual(r.deltas.revenue, 50); // 200 -> 300
 });
+
+test("deltas.avgOrder is a number when both periods had orders", () => {
+    const prev = deliveryOrder({ id: "p1", createdAt: at(2026, 6, 22), total: 200 });
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder(), prev], timetables: [], indoorOrders: [],
+        menu: {}, days: 7, now: NOW,
+    });
+    // current avgOrder 300, previous avgOrder 200 -> +50%
+    assert.strictEqual(typeof r.deltas.avgOrder, "number");
+    assert.strictEqual(r.deltas.avgOrder, 50);
+});
+
+test("deltas.avgOrder is null when the previous period has no orders", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder()], timetables: [], indoorOrders: [],
+        menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.previous.avgOrder, null);
+    assert.strictEqual(r.deltas.avgOrder, null);
+});
+
+test("items come back sorted by count descending", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({
+            id: "o1",
+            items: [
+                { name: "Málo", qty: 1, price: 10 },
+                { name: "Hodně", qty: 5, price: 10 },
+                { name: "Středně", qty: 3, price: 10 },
+            ],
+        })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.deepStrictEqual(r.items.map(i => i.name), ["Hodně", "Středně", "Málo"]);
+});
+
+test("the returned object has every contract key, with the correct stub shapes", () => {
+    const r = stats.computeSalesStats({
+        orders: [], timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.deepStrictEqual(r.chart, { unit: "day", buckets: [] });
+    assert.deepStrictEqual(r.rankings, { topByCount: [], bottomByCount: [], topByRevenue: [] });
+    assert.deepStrictEqual(r.neverSold, []);
+    assert.deepStrictEqual(r.patterns, {
+        weekday: [], bestWeekday: null, hour: [], bestHour: null,
+        channels: [], payments: [],
+    });
+    assert.deepStrictEqual(r.refunds, {
+        total: 0, count: 0, rate: 0, topItems: [], reasons: [], orders: [],
+    });
+});
+
+test("chart.unit is \"hour\" for a 1-day window", () => {
+    const r = stats.computeSalesStats({
+        orders: [], timetables: [], indoorOrders: [], menu: {}, days: 1, now: NOW,
+    });
+    assert.strictEqual(r.chart.unit, "hour");
+});
+
+test("since and until are ISO strings on the computeSalesStats return", () => {
+    const r = stats.computeSalesStats({
+        orders: [], timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(typeof r.since, "string");
+    assert.strictEqual(typeof r.until, "string");
+    assert.ok(!Number.isNaN(Date.parse(r.since)), "since must parse as a valid date");
+    assert.ok(!Number.isNaN(Date.parse(r.until)), "until must parse as a valid date");
+});

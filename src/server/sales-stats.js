@@ -15,9 +15,11 @@
 // flat shape, and every later task (rankings, never-sold items, time-of-day
 // patterns, refund analytics) reads from that same array rather than
 // re-deriving it. `computeSalesStats` is the only exported entry point
-// that walks that seam today; the `rankings`/`neverSold`/`patterns`/
-// `refunds` keys on its return value are empty stubs here, filled in by
-// later tasks, so the contract shape never changes underneath a caller.
+// that walks that seam today; the `chart`/`rankings`/`neverSold`/`patterns`/
+// `refunds` keys on its return value are empty stubs here — their shape
+// (which keys exist, and their type) is fixed by the contract now, so later
+// tasks only need to fill the stub contents in, not change what a caller
+// destructures.
 // ============================================================================
 
 function round2(value) {
@@ -210,14 +212,15 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
     const previous = sumTotals(previousSales);
 
     const items = [...current.itemsByName.values()]
-        .map(entry => ({ name: entry.name, count: entry.count, revenue: round2(entry.revenue) }));
+        .map(entry => ({ name: entry.name, count: entry.count, revenue: round2(entry.revenue) }))
+        .sort((a, b) => b.count - a.count);
 
-    const deltaOf = (cur, prev) => (prev === 0 ? null : round1(((cur - prev) / prev) * 100));
+    const deltaOf = (cur, prev) => (prev === 0 || prev === null ? null : round1(((cur - prev) / prev) * 100));
 
     return {
         days,
-        since,
-        until,
+        since: since.toISOString(),
+        until: until.toISOString(),
         totals: {
             revenue: current.revenue,
             orders: current.orders,
@@ -234,14 +237,19 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
             revenue: deltaOf(current.revenue, previous.revenue),
             orders: deltaOf(current.orders, previous.orders),
             items: deltaOf(current.items, previous.items),
+            avgOrder: deltaOf(current.avgOrder, previous.avgOrder),
         },
         items,
         // Filled in by later tasks — kept here now so the contract shape is
         // stable from the start.
-        rankings: { topByRevenue: [], topByCount: [], bottom: [] },
+        chart: { unit: days === 1 ? "hour" : "day", buckets: [] },
+        rankings: { topByCount: [], bottomByCount: [], topByRevenue: [] },
         neverSold: [],
-        patterns: { bestHour: null, bestDay: null, byHour: [], byDay: [] },
-        refunds: { count: 0, amount: 0, rate: 0 },
+        patterns: {
+            weekday: [], bestWeekday: null, hour: [], bestHour: null,
+            channels: [], payments: [],
+        },
+        refunds: { total: 0, count: 0, rate: 0, topItems: [], reasons: [], orders: [] },
     };
 }
 
