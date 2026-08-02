@@ -50,6 +50,11 @@ const SERVER_CONFIG = {
         // idempotency comes free from the receipt system. See
         // docs/superpowers/specs/2026-07-31-eet2-integration-design.md
         eetRecords: "eet_records",
+        // Offline-first POS — one record per replayed Idempotency-Key, so a
+        // tablet that lost a response can retry without minting a second
+        // sale. See docs/superpowers/specs/2026-08-02-offline-first-pos-
+        // design.md §4.1 and idempotency.js.
+        idempotency: "idempotency",
     },
     serveFrontend: true,
     frontendPath: "src",
@@ -146,6 +151,8 @@ const eet = require("./eet");
 const eetQueue = require("./eet-queue");
 const security = require("./security");
 const csrf = require("./csrf"); // CSRF double-submit-cookie protection — see csrf.js
+const idempotency = require("./idempotency"); // replay protection for the offline POS queue — see idempotency.js
+const offlineSaleRules = require("./offline-sale"); // paidAt clamping + client-snapshot pricing — see offline-sale.js
 const V = require("./validation"); // input validation (zod schemas + validate()/validateParams() middleware) — see validation.js
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
@@ -1420,7 +1427,21 @@ function vatFromGross(grossAmount, ratePercent) {
 // already set (idempotent — see comment block above). `items` uses either
 // cart shape ({ name, price, qty, vatRate } or { item, price, qty, vatRate })
 // — same shapes priceOrderItems() already normalizes into every order.
-function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description, gopayInstrument = null, originalKind = null, skipEetEnqueue = false }) {
+// `issuedAt` exists for the offline POS (spec 2026-08-02 §4.2) and for
+// nothing else: a sale taken on a tablet at 19:40 with no Wi-Fi and synced
+// at 23:15 must be numbered and REPORTED at 19:40. It is deliberately one
+// value rather than two, because it has to reach both consumers together —
+// nextReceiptNumber() (so a New Year's Eve sale synced on 2 January draws
+// from the correct year's counter) and receipt.issuedAt, which eet-queue.js
+// turns straight into `dat_trzby`. Splitting them would let a receipt and
+// its tax report disagree about which day the money changed hands.
+//
+// Callers must pass a full ISO string WITH milliseconds, exactly as
+// `new Date().toISOString()` produces. eet-queue.js strips them itself with
+// a deliberate regex (see its header — round-tripping through Date would
+// silently rewrite a non-UTC offset), so hand-rolling a "cleaner" format
+// here would bypass reasoning that was paid for in a real bug.
+function createReceiptForOrder({ kind, items, total, paymentMethod, existingReceiptId, description, gopayInstrument = null, originalKind = null, skipEetEnqueue = false, issuedAt: issuedAtOverride = null }) {
     let supersedesReceiptId = null;
     if (existingReceiptId) {
         const existing = db.get(COL.receipts, existingReceiptId);
@@ -1469,7 +1490,7 @@ function createReceiptForOrder({ kind, items, total, paymentMethod, existingRece
             });
     }
 
-    const issuedAt = new Date().toISOString();
+    const issuedAt = issuedAtOverride || new Date().toISOString();
     const id = generateReceiptId();
     const receipt = {
         id,
@@ -2611,6 +2632,70 @@ function setupMiddleware() {
         }
     }
     const staticOptions = { setHeaders: setLongCacheHeaders };
+
+    // ── Service worker (offline POS, spec §3.2) ─────────────────────────
+    //
+    // sw.js is NOT served off disk. Two substitutions happen here:
+    //
+    //   __BASE_PATH__     so the precache list resolves under /reservation
+    //                     (or wherever basePath points) rather than /.
+    //   __SHELL_VERSION__ a hash of the shell files' own bytes, which is
+    //                     what makes the cache name change when — and only
+    //                     when — the shell actually changes.
+    //
+    // The version is derived rather than hand-maintained on purpose. A
+    // constant somebody has to remember to bump is precisely how a bar ends
+    // up running last month's inner.js after a deploy that appeared to
+    // succeed, and the surrounding cache policy makes that failure sticky:
+    // express.static serves assets `immutable, max-age=2592000`.
+    //
+    // Registered BEFORE minify + express.static, both of which would
+    // otherwise serve this file with the wrong headers — and a service
+    // worker script the browser is allowed to cache is a worker you cannot
+    // update remotely.
+    const SW_SHELL_FILES = [
+        ["html", "inner.html"], ["css", "design.css"], ["css", "floorplan.css"], ["css", "inner.css"],
+        ["config.js"], ["js", "qr.js"], ["js", "floorplan.js"], ["js", "pos-db.js"], ["js", "pos-sync.js"],
+        ["js", "inner.js"], ["sw.js"],
+    ];
+
+    async function computeShellVersion() {
+        const hash = crypto.createHash("sha256");
+        for (const parts of SW_SHELL_FILES) {
+            try {
+                hash.update(await fs.readFile(path.join(frontendPath, ...parts)));
+            } catch (e) {
+                // A missing shell file must not crash the route — but it
+                // must change the hash, so the next deploy that restores it
+                // still invalidates the cache.
+                hash.update(`missing:${parts.join("/")}`);
+            }
+        }
+        return hash.digest("hex").slice(0, 12);
+    }
+
+    async function serviceWorkerRoute(req, res) {
+        try {
+            const source = await fs.readFile(path.join(frontendPath, "sw.js"), "utf8");
+            const version = await computeShellVersion();
+            const body = source
+                .replace(/__SHELL_VERSION__/g, version)
+                .replace(/__BASE_PATH__/g, base || "");
+            res.set("Content-Type", "application/javascript; charset=utf-8");
+            // no-store, not no-cache: the browser must re-fetch this script
+            // on every update check, or a broken worker becomes permanent.
+            res.set("Cache-Control", "no-store");
+            // Lets a worker served from /reservation/sw.js control the whole
+            // base path rather than only /reservation/.
+            res.set("Service-Worker-Allowed", `${base || ""}/`);
+            res.send(body);
+        } catch (e) {
+            console.error("Failed to serve sw.js:", e);
+            res.status(500).type("application/javascript").send("// service worker unavailable");
+        }
+    }
+
+    app.get(`${base || ""}/sw.js`, serviceWorkerRoute);
 
     if (base) {
         for (const filename of legalTemplateFileNames) {
@@ -3834,23 +3919,75 @@ function setupAPIRoutes() {
 
     // ── INDOOR ORDERS (staff-placed) ─────────────────────────────────────
 
-    app.post(`${api}/indoor-orders`, csrf.requireCsrf, requireAuth, V.validate(V.createIndoorOrderSchema), (req, res) => {
-        const { tableName, guestName, items } = req.body || {};
+    // Replay protection for the offline POS queue (spec 2026-08-02 §4.1).
+    // Mounted AFTER requireAuth on purpose: a stored response carries the
+    // order and receipt ids, so replaying it must require the same session
+    // the original request did. Mounted BEFORE V.validate because a replay
+    // has nothing left to validate — the body it is answering for was
+    // validated when it actually ran.
+    const indoorIdempotency = idempotency.middleware({ db, col: COL.idempotency });
+
+    app.post(`${api}/indoor-orders`, csrf.requireCsrf, requireAuth, indoorIdempotency, V.validate(V.createIndoorOrderSchema), (req, res) => {
+        const { tableName, guestName, items, offlineSale } = req.body || {};
 
         // Server-side pricing — same rule as delivery orders: client sends
         // item + qty, price/total always come from the live menu.
         const priced = priceOrderItems(items);
-        if (priced.error) return res.status(400).json({ error: priced.error });
+
+        // ── Offline sale (spec §4.3) ──────────────────────────────────
+        //
+        // THIS BLOCK IS THE ACCOUNTANT'S DECISION IN CODE. Spec §7: a sale
+        // taken offline at a price that has since changed is recorded and
+        // reported at the price the guest actually paid. If that answer
+        // comes back different, this is the only place that changes.
+        //
+        // Note what is deliberately NOT done here: `priced.error` does not
+        // return 400. For a live order it must — that is the sold-out
+        // guard. For a replayed one it would strand real money forever, so
+        // the snapshot stands instead. See resolvePricing's header.
+        let pricing = null;
+        if (offlineSale) {
+            const snapshot = offlineSaleRules.validateClientPricing(items, req.body.total, {
+                maxItems: MAX_ITEMS_PER_ORDER,
+                maxQty: MAX_ITEM_QTY,
+            });
+            if (!snapshot.ok) return res.status(400).json({ error: snapshot.error });
+
+            pricing = offlineSaleRules.resolvePricing({ live: priced, client: snapshot });
+            if (pricing.pricedOffline) {
+                console.warn(
+                    `Offline sale priced from client snapshot (${pricing.reason}): ` +
+                    `stůl ${tableName}, klient ${pricing.total} Kč, server ${pricing.serverTotal ?? "n/a"} Kč`
+                );
+            }
+        } else {
+            if (priced.error) return res.status(400).json({ error: priced.error });
+            pricing = { items: priced.items, total: priced.total, pricedOffline: false, serverTotal: priced.total, reason: null };
+        }
 
         const id = generateFileId();
         const order = {
             id,
             tableName: tableName.trim(),
             guestName: (guestName || "").trim(),
-            items: priced.items,
-            total: priced.total,
+            items: pricing.items,
+            total: pricing.total,
             kitchenStatus: "pending",
             createdAt: new Date().toISOString(),
+            // Offline provenance (spec §4.3). `pricedOffline` is the audit
+            // flag that says "these prices came from a tablet's snapshot,
+            // not from the live menu" — without it a drifted sale is
+            // indistinguishable after the fact from a mispriced one.
+            // Non-offline orders carry the same keys with inert values so
+            // every indoor order has one shape.
+            pricedOffline: pricing.pricedOffline,
+            offlineServerTotal: pricing.pricedOffline ? pricing.serverTotal : null,
+            offlinePricingReason: pricing.pricedOffline ? pricing.reason : null,
+            // Which device's queue this came from. The client does not need
+            // it — it dedupes its own list on the server order id it learns
+            // at sync — but without it there is no way to trace a disputed
+            // sale back to the tablet that took it.
+            clientSaleId: typeof (req.body || {}).clientSaleId === "string" ? req.body.clientSaleId.slice(0, 64) : null,
             // Walk-in/table orders are usually settled physically at the
             // table (cash or a card terminal) — paymentMethod stays null for
             // that case, same as before. Optionally payable online too, via
@@ -3866,10 +4003,24 @@ function setupAPIRoutes() {
     });
 
     // POST — waiter marks a walk-in table order as paid (cash / card terminal).
-    app.post(`${api}/indoor-orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), async (req, res) => {
+    //
+    // Already idempotent per order before the offline POS existed: a second
+    // call finds order.receiptId set, createReceiptForOrder returns that
+    // same receipt, and eetQueue.enqueue dedupes on receipt id. The
+    // Idempotency-Key guard below is belt-and-braces plus a stable stored
+    // response body — the route that genuinely needed it is the creation
+    // one above. See idempotency.js's header.
+    app.post(`${api}/indoor-orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, indoorIdempotency, V.validateParams(V.paramsId), V.validate(V.markPaidSchema), async (req, res) => {
         const order = db.get(COL.indoorOrders, req.params.id);
         if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
+
+        // When did the money actually change hands (spec §4.2)? Absent
+        // paidAt this is `now` and nothing about the online path changes.
+        const paidAt = offlineSaleRules.resolvePaidAt(req.body && req.body.paidAt);
+        if (!paidAt.ok) return res.status(400).json({ error: paidAt.error });
+
         order.paymentStatus = "paid";
+        order.paidAt = paidAt.issuedAt;
         const receipt = createReceiptForOrder({
             kind: "indoor",
             items: order.items,
@@ -3877,12 +4028,17 @@ function setupAPIRoutes() {
             paymentMethod: order.paymentMethod || "cash",
             existingReceiptId: order.receiptId,
             description: `Stůl ${order.tableName} — objednávka ${order.id}`,
+            issuedAt: paidAt.issuedAt,
         });
         order.receiptId = receipt.id;
         db.set(COL.indoorOrders, order.id, order);
         if (receipt) await sendEetForReceipt(receipt.id);
         broadcastBoardEvent();
-        res.json({ success: true, order, receiptId: receipt.id });
+        // receiptNumber is returned alongside the id for the offline queue
+        // (spec §3.1): the tablet stores it on the synced sale so its local
+        // audit trail can name the receipt a sale became, rather than
+        // holding an opaque id nobody can look up against paper.
+        res.json({ success: true, order, receiptId: receipt.id, receiptNumber: receipt.number });
     });
 
     // POST — starts an online GoPay payment for a table order (e.g. guest
@@ -4740,6 +4896,23 @@ async function start() {
             if (now > entry.expiresAt) pendingVerifications.delete(phone);
         }
     }, 60 * 1000);
+
+    // Offline POS idempotency keys (spec 2026-08-02 §4.1). Swept hourly and
+    // kept for 30 days — far longer than any drain could still be retrying,
+    // but the window only has to outlive "tablet left in a drawer over a
+    // long weekend". Runs once at boot too, so a server that is restarted
+    // more often than hourly still prunes. unref()'d: housekeeping must
+    // never be the reason the process stays alive.
+    const pruneIdempotency = () => {
+        try {
+            const removed = idempotency.prune(db, COL.idempotency);
+            if (removed) console.log(`🧹 Pruned ${removed} expired idempotency key(s)`);
+        } catch (e) {
+            console.error("Idempotency prune failed:", e);
+        }
+    };
+    pruneIdempotency();
+    setInterval(pruneIdempotency, 60 * 60 * 1000).unref();
 
     if (!smsIsConfigured()) {
         console.warn("⚠️  Twilio not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER) — verification codes will be logged to the console instead of sent as real SMS.");

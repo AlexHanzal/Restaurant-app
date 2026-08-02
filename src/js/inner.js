@@ -188,6 +188,63 @@ async function tryConnect(url) {
     }
 }
 
+// The bar's Wi-Fi is down and the barman still has to open the till.
+//
+// Without this, a failed tryConnect() drops the connection gate over the
+// whole app — an "enter the server address" dialog, which is exactly the
+// wrong thing to show someone whose problem is that there is no network.
+// The whole offline-first effort would be invisible behind that overlay.
+//
+// Everything the floor view needs (timetables, menu, the order list) is a
+// GET under /api/, which the service worker serves from its cache when the
+// network is unreachable — so loadAllTables() below genuinely works here.
+async function enterOfflineMode() {
+    // We just proved the server is unreachable — record it, so the status
+    // pill agrees with the connection label instead of contradicting it.
+    if (typeof POSSync !== 'undefined') POSSync.noteContact(false);
+    document.getElementById('gateOverlay').style.display = 'none';
+    document.getElementById('connDot').classList.add('bad');
+    document.getElementById('connText').textContent = 'Offline';
+
+    // A session that was valid when the network died is the best available
+    // answer. The server revalidates it on the first successful drain, and
+    // until then there is nothing this device could check it against.
+    const session = getSession();
+    if (session) {
+        setSession(session);
+        hideLoginGate();
+    } else {
+        // No cached session and no network: the app cannot authenticate, so
+        // it must not pretend to work. Sales taken now could never be
+        // attributed to anyone.
+        setSession(null);
+        showLoginGate();
+    }
+
+    try {
+        await loadAllTables();
+    } catch (e) {
+        console.error('[pos] offline start could not restore the floor view', e);
+    }
+
+    await posRefreshStatus();
+    showToast('Offline režim — objednávky se ukládají do zařízení', true);
+}
+
+// Can this device usefully run with no server? Only if the queue is alive
+// AND the service worker has something cached to work from — otherwise
+// "offline mode" is a blank screen with a reassuring label on it.
+async function posCanRunOffline() {
+    if (!posReady) return false;
+    try {
+        const cached = await POSDB.serverOrders.all();
+        const hasShell = 'serviceWorker' in navigator && !!(await navigator.serviceWorker.getRegistration());
+        return hasShell || cached.length > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
 document.getElementById('gateConnectBtn').addEventListener('click', () => {
     const val = document.getElementById('gateApiInput').value.trim();
     if (val) tryConnect(val);
@@ -288,8 +345,69 @@ document.getElementById('loginAbbrInput').addEventListener('keypress', e => { if
 document.getElementById('loginPasswordInput').addEventListener('keypress', e => { if (e.key === 'Enter') attemptLogin(); });
 
 document.getElementById('logoutBtn').addEventListener('click', () => {
+    // End of shift with money the server has never seen. The barman is
+    // usually about to put the tablet in a drawer, which is exactly when
+    // an unnoticed queue turns into an unreported sale.
+    if (posReady) {
+        const money = POSDB.unsentMoneyCount(posSales);
+        const failed = POSDB.failedCount(posSales);
+        if (money > 0 || failed > 0) {
+            const parts = [];
+            if (money) parts.push(`${money} zaplacených účtenek čeká na odeslání`);
+            if (failed) parts.push(`${failed} účtenek server zamítl`);
+            const proceed = confirm(
+                `${parts.join(' a ')}.\n\n` +
+                'Nechte tablet zapnutý a připojený, dokud se neodešlou. Přesto se odhlásit?'
+            );
+            if (!proceed) return;
+        }
+    }
+
+    // NOTE: this clears the session and NOTHING else. The sales queue is
+    // deliberately untouched — queued money is not session state, and a
+    // logout (or a session expiring overnight) must never be able to
+    // discard a sale that has not been reported. See spec §3.3.
     setSession(null);
     showLoginGate();
+});
+
+// ── Offline POS queue modal wiring (spec §3.4) ──────────────────────────
+
+document.getElementById('posStatusPill').addEventListener('click', () => {
+    posRenderQueueModal();
+    document.getElementById('posQueueModal').style.display = 'flex';
+});
+
+document.getElementById('posQueueCloseBtn').addEventListener('click', () => {
+    document.getElementById('posQueueModal').style.display = 'none';
+});
+
+document.getElementById('posQueueModal').addEventListener('click', e => {
+    if (e.target.id === 'posQueueModal') document.getElementById('posQueueModal').style.display = 'none';
+});
+
+document.getElementById('posQueueRetryBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('posQueueRetryBtn');
+    btn.disabled = true;
+    btn.textContent = 'Odesílám…';
+    try {
+        // A manual retry deliberately ignores each sale's backoff: the
+        // barman pressing this button is new information the schedule did
+        // not have — usually "I can see the Wi-Fi is back".
+        for (const sale of posSales) {
+            if (sale.state === POSDB.STATE.FAILED) continue; // needs a human, not another attempt
+            if (POSDB.pendingStep(sale) && sale.nextAttemptAt) {
+                await POSDB.sales.put(Object.assign({}, sale, { nextAttemptAt: 0 }));
+            }
+        }
+        const result = await POSSync.drain();
+        await posRefreshStatus();
+        posRenderQueueModal();
+        showToast(result.synced ? `Odesláno: ${result.synced}` : 'Zatím se nepodařilo odeslat', !result.synced);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Zkusit odeslat teď';
+    }
 });
 
 document.getElementById('downloadDataBtn').addEventListener('click', () => {
@@ -309,20 +427,372 @@ document.getElementById('downloadDataBtn').addEventListener('click', () => {
 });
 
 // ════════════════════════════════════════════════════════════════════════
+// OFFLINE-FIRST POS
+//
+// Spec: docs/superpowers/specs/2026-08-02-offline-first-pos-design.md
+//
+// Every table order and every payment is written to IndexedDB FIRST, then
+// drained to the server by pos-sync.js. The point is not speed — it is that
+// the offline path runs on every sale of every shift, so an outage changes
+// nothing about which code executes. A queue-on-failure design would put
+// this code's first real execution and its first business-critical
+// execution on the same evening.
+//
+// This section owns three things: startup, the status pill, and the two
+// write paths (submit an order, close a tab). It never talks to EET —
+// eet-queue.js on the server already owns that, retries included.
+// ════════════════════════════════════════════════════════════════════════
+
+let posReady = false;
+let posSales = [];        // local mirror, refreshed on every queue change
+let posPersistence = null;
+let posDeviceId = null;
+
+async function posInit() {
+    if (!root_hasIndexedDb()) {
+        // Without IndexedDB there is no queue, and a till that silently
+        // loses sales is worse than one that admits it cannot go offline.
+        console.warn('[pos] IndexedDB unavailable — offline mode is OFF');
+        return;
+    }
+
+    try {
+        await POSDB.open();
+        posPersistence = await POSDB.requestPersistence();
+        if (!posPersistence.persisted) {
+            // Not fatal — Chrome usually grants this once the app is
+            // installed — but it means the browser may evict unsent sales
+            // under storage pressure, which is money disappearing. Someone
+            // has to be able to find out.
+            console.warn('[pos] storage persistence NOT granted:', posPersistence);
+        }
+
+        const deviceId = await POSDB.deviceId();
+
+        POSSync.configure({
+            // A getter: tryConnect() rewrites API_URL, and a queue holding
+            // a stale copy would drain a shift's sales at the wrong server.
+            getApiUrl: () => API_URL,
+            getCsrfToken: ensureCsrfToken,
+            onChange: posRefreshStatus,
+            // A 401 during a drain is NOT a reason to throw the barman back
+            // to the login gate mid-service, and emphatically not a reason
+            // to touch the queue: queued money is not session state.
+            onAuthRequired: () => showToast('Přihlášení vypršelo — přihlaste se, aby se odeslaly účtenky', true),
+            onCsrfStale: () => { cachedCsrfToken = null; },
+        });
+
+        POSSync.start();
+        posDeviceId = deviceId;
+        posReady = true;
+
+        // The pill has to react to connectivity even when no drain runs —
+        // going offline skips the drain entirely, so without these the
+        // status would keep claiming "Online" until the next sale.
+        window.addEventListener('online', posRefreshStatus);
+        window.addEventListener('offline', posRefreshStatus);
+
+        await POSDB.pruneSynced();
+        await posRefreshStatus();
+        posRegisterServiceWorker();
+    } catch (e) {
+        console.error('[pos] init failed — offline mode is OFF', e);
+    }
+}
+
+function root_hasIndexedDb() {
+    return typeof indexedDB !== 'undefined' && typeof POSDB !== 'undefined';
+}
+
+// ── Service worker ──────────────────────────────────────────────────────
+
+function posRegisterServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+        console.warn('[pos] service workers unsupported — the app will not load offline');
+        return;
+    }
+
+    // Service workers require a secure context. THIS is the failure worth
+    // shouting about: a tablet pointed at http://192.168.x.x:3000 registers
+    // nothing, reports no error anybody would see, and looks completely
+    // fine right up until the morning the Wi-Fi is down and the till will
+    // not open. localhost is exempt, so dev is unaffected.
+    if (!window.isSecureContext) {
+        console.error('[pos] insecure context — the service worker will NOT register. The till will not load offline. Serve the app over HTTPS.');
+        showToast('Pozor: pokladna se bez HTTPS nenačte offline', true);
+        return;
+    }
+
+    // Derived from THIS PAGE's location, never from API_BASE_URL. A service
+    // worker can only be registered from its own origin, and in the
+    // split-server dev setup the API lives on a different one — using it
+    // here would fail with a SecurityError that looks like a bug in the
+    // worker rather than in the URL.
+    //
+    //   /reservation/html/inner.html → /reservation
+    //   /reservation/admin           → /reservation
+    //   /inner.html                  → ""
+    const appBase = window.location.pathname.replace(/\/(html\/)?[^/]*$/, '');
+
+    navigator.serviceWorker.register(`${appBase}/sw.js`, { scope: `${appBase}/` })
+        .catch(e => console.error('[pos] service worker registration failed', e));
+
+    // Background Sync wakes the page when connectivity returns even if it
+    // was closed; the worker cannot drain by itself because only this side
+    // holds the idempotency keys.
+    navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data && event.data.type === 'pos-drain') POSSync.drain();
+    });
+}
+
+// ── Status pill ─────────────────────────────────────────────────────────
+
+async function posRefreshStatus() {
+    if (!posReady) return;
+    try {
+        posSales = await POSDB.sales.all();
+    } catch (e) {
+        console.error('[pos] could not read the queue', e);
+        return;
+    }
+
+    const pill = document.getElementById('posStatusPill');
+    const text = document.getElementById('posStatusText');
+    if (!pill || !text) return;
+
+    const money = POSDB.unsentMoneyCount(posSales);
+    const pending = POSDB.pendingCount(posSales);
+    const failed = POSDB.failedCount(posSales);
+    // serverUnreachable(), not definitelyOffline(): the till can be sitting
+    // in offline mode with the server dead while the tablet still has
+    // perfectly good Wi-Fi. Reporting "Online" there is the pill lying
+    // about the one thing it exists to report.
+    const offline = POSSync.serverUnreachable();
+
+    pill.hidden = false;
+    pill.classList.toggle('stuck', failed > 0);
+    pill.classList.toggle('waiting', failed === 0 && (pending > 0 || offline));
+
+    if (failed > 0) {
+        text.textContent = `${failed} ${czPlural(failed, 'účtenka', 'účtenky', 'účtenek')} zamítnuto`;
+    } else if (money > 0) {
+        // Money first. An unpaid order the kitchen cannot see matters, but
+        // an unreported sale is the one with legal consequences.
+        text.textContent = `${money} ${czPlural(money, 'účtenka', 'účtenky', 'účtenek')} k odeslání`;
+    } else if (pending > 0) {
+        text.textContent = `${pending} ${czPlural(pending, 'objednávka', 'objednávky', 'objednávek')} k odeslání`;
+    } else {
+        text.textContent = offline ? 'Offline' : 'Online';
+    }
+
+    pill.title = offline
+        ? 'Zařízení je offline. Účtenky se odešlou automaticky po obnovení sítě.'
+        : 'Připojeno k serveru.';
+
+    posApplyOfflineUi(offline);
+}
+
+// Spec §5 — only the till goes offline. Everything else is either shared
+// mutable state (no correct merge when two devices diverge) or needs a live
+// third party, so it is visibly disabled rather than left to fail on tap.
+//
+// A control that silently does nothing when touched teaches staff to
+// distrust the whole screen, and a waiter who has learned to ignore an
+// unresponsive button is one who will also ignore the unsent-sales pill.
+const POS_ONLINE_ONLY_IDS = [
+    'viewMenuBtn',      // menu admin — shared state
+    'viewSalesBtn',     // stats — server-computed
+    'viewUsersBtn',     // staff admin — shared state
+    'viewSettingsBtn',  // restaurant settings — shared state
+    'viewLayoutBtn',    // floorplan editing — shared state
+    'viewDailyMenuBtn', // daily menu — shared state
+    'downloadDataBtn',  // streams the live SQLite file
+];
+
+function posApplyOfflineUi(offline) {
+    for (const id of POS_ONLINE_ONLY_IDS) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.classList.toggle('inn-offline-disabled', offline);
+        if (offline) el.setAttribute('title', 'Nedostupné offline');
+        else el.removeAttribute('title');
+    }
+
+    // GoPay needs a live gateway AND the guest's own phone; there is
+    // nothing to queue and nothing to retry. These are rendered per row, so
+    // they are selected rather than looked up by id.
+    document.querySelectorAll('.inn-payonline-btn').forEach(btn => {
+        btn.classList.toggle('inn-offline-disabled', offline);
+        if (offline) btn.setAttribute('title', 'Online platba vyžaduje připojení');
+        else btn.removeAttribute('title');
+    });
+}
+
+// Czech has three plural forms (1 / 2–4 / 5+). Getting this wrong reads as
+// broken software to a native speaker, and this string sits in the toolbar
+// all shift.
+function czPlural(n, one, few, many) {
+    if (n === 1) return one;
+    if (n >= 2 && n <= 4) return few;
+    return many;
+}
+
+// ── Write paths ─────────────────────────────────────────────────────────
+
+// A local sale rendered in the shape the existing table/order UI expects,
+// so nothing downstream has to know whether an order came from the server
+// or from this device's queue.
+function posSaleToOrderShape(sale) {
+    return {
+        id: sale.serverOrderId || `local:${sale.clientId}`,
+        tableName: sale.tableName,
+        guestName: sale.guestName,
+        items: sale.items,
+        total: sale.total,
+        kitchenStatus: 'pending',
+        createdAt: sale.createdAt,
+        paymentStatus: sale.state === POSDB.STATE.PAID || sale.state === POSDB.STATE.SYNCED ? 'paid' : 'unpaid',
+        receiptId: sale.receiptId || null,
+        // Markers the UI can use to explain why this row looks different.
+        posLocal: true,
+        posState: sale.state,
+        posClientId: sale.clientId,
+    };
+}
+
+// Server list ∪ local unsynced sales. A one-way merge, not bidirectional
+// sync: local wins only while the server does not yet know the truth.
+function posMergeOrders(serverList) {
+    const local = posSales.filter(s => s.state !== POSDB.STATE.SYNCED);
+    const overriddenIds = new Set(local.map(s => s.serverOrderId).filter(Boolean));
+    const merged = (serverList || []).filter(o => !overriddenIds.has(o.id));
+    return merged.concat(local.map(posSaleToOrderShape));
+}
+
+// Called by the "Odeslat do kuchyně" button. Returns immediately — the sale
+// is durable the moment this resolves, network or not.
+async function posSubmitOrder({ tableName, guestName, items, total }) {
+    const sale = POSDB.createSale({ tableName, guestName, items, total, deviceId: posDeviceId });
+    await POSSync.enqueuePaid(sale); // durable write, then an immediate drain attempt
+    await posRefreshStatus();
+    return sale;
+}
+
+// Called when a tab is closed. `orderId` is either a real server order id or
+// the `local:<clientId>` placeholder used by a sale that has not reached the
+// server yet.
+async function posMarkPaid(orderId) {
+    let sale = null;
+
+    if (String(orderId).startsWith('local:')) {
+        const clientId = String(orderId).slice('local:'.length);
+        sale = posSales.find(s => s.clientId === clientId) || null;
+    } else {
+        sale = posSales.find(s => s.serverOrderId === orderId) || null;
+        if (!sale) {
+            // An order that exists only on the server — created online,
+            // possibly by a different device. Adopt it into this device's
+            // queue so the payment is durable here even if the network dies
+            // between this click and the request.
+            const existing = indoorWalkinOrders.find(o => o.id === orderId);
+            if (!existing) throw new Error('Objednávka nenalezena');
+            sale = POSDB.createSale({
+                tableName: existing.tableName,
+                guestName: existing.guestName,
+                items: existing.items,
+                total: existing.total,
+                deviceId: posDeviceId,
+            });
+            sale = POSDB.advanceSale(sale, 'created', { serverOrderId: orderId });
+        }
+    }
+
+    if (!sale) throw new Error('Objednávka nenalezena');
+
+    const paid = POSDB.advanceSale(sale, 'pay', { paymentMethod: 'cash' });
+    await POSSync.enqueuePaid(paid);
+    await posRefreshStatus();
+    return paid;
+}
+
+// ── Queue modal ─────────────────────────────────────────────────────────
+
+function posRenderQueueModal() {
+    const pendingBox = document.getElementById('posQueuePending');
+    const failedBox = document.getElementById('posQueueFailed');
+    const intro = document.getElementById('posQueueIntro');
+    if (!pendingBox || !failedBox) return;
+
+    const pending = posSales.filter(s => POSDB.pendingStep(s) !== null);
+    const failed = posSales.filter(s => s.state === POSDB.STATE.FAILED);
+
+    intro.textContent = pending.length === 0 && failed.length === 0
+        ? 'Vše je odesláno na server.'
+        : 'Účtenky se odešlou automaticky, jakmile bude dostupná síť.';
+
+    const row = sale => {
+        const isMoney = sale.state === POSDB.STATE.PAID;
+        return `<div class="inn-pos-sale">
+            <div>
+                <div><strong>Stůl ${escapeHtml(sale.tableName)}</strong>${sale.guestName ? ' — ' + escapeHtml(sale.guestName) : ''}</div>
+                <div class="inn-pos-sale-meta">${isMoney ? 'zaplaceno' : 'objednávka'} ${escapeHtml(posTimeLabel(sale.paidAt || sale.createdAt))}${sale.attempts ? ` · ${sale.attempts}. pokus` : ''}</div>
+                ${sale.lastError ? `<div class="inn-pos-sale-error">${escapeHtml(sale.lastError)}</div>` : ''}
+            </div>
+            <div class="inn-pos-sale-amount">${Number(sale.total).toFixed(0)} Kč</div>
+        </div>`;
+    };
+
+    pendingBox.innerHTML = pending.length
+        ? `<div class="inn-pos-queue-group"><h4>Čeká na odeslání (${pending.length})</h4>${pending.map(row).join('')}</div>`
+        : '';
+
+    // Kept visually and structurally separate from the pending list: these
+    // will never resolve on their own, and burying them among rows that
+    // will is how a rejected sale goes unnoticed for a week.
+    failedBox.innerHTML = failed.length
+        ? `<div class="inn-pos-queue-group"><h4>Zamítnuto serverem — vyžaduje zásah (${failed.length})</h4>${failed.map(row).join('')}</div>`
+        : '';
+}
+
+function posTimeLabel(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // DATA LOADING
 // ════════════════════════════════════════════════════════════════════════
 
 let indoorWalkinOrders = []; // walk-in table orders (no reservation) — see fetchIndoorWalkinOrders
 
 async function fetchIndoorWalkinOrders() {
+    let serverList = null;
     try {
         const res = await apiFetch(`${API_URL}/indoor-orders`);
         if (!res.ok) throw new Error('HTTP ' + res.status);
-        indoorWalkinOrders = await res.json();
+        serverList = await res.json();
+        // The server answered — real evidence the network works, which is
+        // the only kind the status pill accepts.
+        if (typeof POSSync !== 'undefined') POSSync.noteContact(true);
+        // Cache it so the next offline start still shows the floor's state
+        // rather than an empty room.
+        if (posReady) await POSDB.serverOrders.bulkPut(serverList);
     } catch (e) {
         console.error('Failed to load walk-in orders', e);
-        indoorWalkinOrders = [];
+        if (typeof POSSync !== 'undefined') POSSync.noteContact(false);
+        // Offline: fall back to the last known server state instead of
+        // blanking the screen. An empty list here would read as "no open
+        // tabs", which is a far more dangerous lie than stale data.
+        if (posReady) {
+            try { serverList = await POSDB.serverOrders.all(); } catch (e2) { serverList = []; }
+        } else {
+            serverList = [];
+        }
     }
+
+    indoorWalkinOrders = posReady ? posMergeOrders(serverList) : serverList;
 }
 
 async function loadAllTables() {
@@ -934,6 +1404,33 @@ async function markReservationOrderPaid(tableName, booking) {
 }
 
 async function markWalkinOrderPaid(orderId) {
+    // Offline-first (spec §3.3): the payment is recorded locally and the
+    // server call is a drain step, not a precondition. The barman must be
+    // able to close a tab with the Wi-Fi down, and the guest is already
+    // walking away.
+    if (posReady) {
+        try {
+            const sale = await posMarkPaid(orderId);
+            if (sale.state === POSDB.STATE.SYNCED) {
+                showToastWithReceipt('Objednávka označena jako zaplacená', sale.receiptId);
+            } else {
+                // Deliberately different wording. "Paid" and "paid, and the
+                // server knows" are not the same fact, and a barman who is
+                // told the second when only the first is true has no way to
+                // notice a queue that is quietly failing.
+                showToast('Zaplaceno — účtenka se odešle po obnovení sítě');
+            }
+            await refreshWalkinAndRender();
+            return;
+        } catch (e) {
+            console.error(e);
+            showToast('Nepodařilo se označit jako zaplaceno', true);
+            return;
+        }
+    }
+
+    // No IndexedDB — fall back to the original online-only behaviour rather
+    // than refusing to take money.
     try {
         const res = await apiFetch(`${API_URL}/indoor-orders/${orderId}/mark-paid`, { method: 'POST' });
         const result = await res.json().catch(() => ({}));
@@ -944,6 +1441,19 @@ async function markWalkinOrderPaid(orderId) {
         console.error(e);
         showToast('Nepodařilo se označit jako zaplaceno', true);
     }
+}
+
+// Refreshes the walk-in list and repaints the current view WITHOUT going
+// through loadAllTables(), which also refetches every timetable and fails
+// wholesale when offline — taking the repaint down with it.
+async function refreshWalkinAndRender() {
+    await fetchIndoorWalkinOrders();
+    renderSidebar();
+    if (currentView === 'overview') renderOverview();
+    else if (selectedTableName && tables[selectedTableName]) renderDetail(selectedTableName);
+    // Rows are rebuilt above, which means any per-row online-only control
+    // (the GoPay buttons) is a fresh element without the disabled class.
+    await posRefreshStatus();
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1579,9 +2089,21 @@ updateClock();
     document.addEventListener('touchstart', () => {}, { passive: true });
 
     document.getElementById('gateApiInput').value = API_BASE_URL;
+
+    // The queue comes up BEFORE the first server contact, so a till that
+    // boots with no network already has somewhere to put a sale.
+    await posInit();
+
     const ok = await tryConnect(API_BASE_URL);
     if (!ok) {
-        document.getElementById('gateOverlay').style.display = 'flex';
+        if (await posCanRunOffline()) {
+            await enterOfflineMode();
+        } else {
+            // Genuinely nothing to work from — a first run on this device,
+            // or a wrong server address. The connect gate is the right
+            // answer here and only here.
+            document.getElementById('gateOverlay').style.display = 'flex';
+        }
     }
 })();
 
@@ -2839,6 +3361,27 @@ document.getElementById('waiterOrderSendBtn').addEventListener('click', async ()
     btn.textContent = 'Odesílám…';
 
     try {
+        if (posReady) {
+            // Durable the moment this resolves, network or not.
+            await posSubmitOrder({
+                tableName: waiterActiveTable,
+                guestName,
+                items,
+                total: getWaiterCartTotal(),
+            });
+            // The kitchen board is a server-side SSE push, so an order that
+            // has not reached the server does not exist to the kitchen.
+            // That is a real operational consequence of working offline and
+            // the person who just took the order has to be told it — not
+            // left to find out when the food never arrives.
+            showToast(POSSync.serverUnreachable()
+                ? `Objednávka pro ${waiterActiveTable} uložena — do kuchyně se odešle po obnovení sítě`
+                : `Objednávka pro ${waiterActiveTable} odeslána do kuchyně`);
+            closeWaiterOrderModal();
+            await refreshWalkinAndRender();
+            return;
+        }
+
         const res = await apiFetch(`${API_URL}/indoor-orders`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

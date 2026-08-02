@@ -282,10 +282,33 @@ const createOrderSchema = z.object({
 }).passthrough();
 
 // POST /indoor-orders (staff-placed)
+//
+// `offlineSale`/`total` exist for the offline POS queue (spec 2026-08-02
+// §4.3). Deliberately loose here: this schema only says "the field may be
+// present and is a boolean/number". The real money guards — every line
+// price finite and non-negative, `total` equal to the sum of its own lines
+// — live in offline-sale.js's validateClientPricing, because they are
+// cross-field rules with tax consequences and belong somewhere unit-testable
+// rather than buried in a zod chain. Adding them is safe precisely because
+// cartItemSchema is already `.passthrough()`, so a `price` on a line has
+// always been accepted and, until now, always ignored.
 const createIndoorOrderSchema = z.object({
     tableName: reqStr(100, "Stůl"),
     guestName: optStr(150, "Jméno hosta"),
     items: itemsArraySchema,
+    offlineSale: z.boolean().optional(),
+    total: z.number().optional(),
+}).passthrough();
+
+// POST /indoor-orders/:id/mark-paid
+//
+// A body was never required on this route and still is not — `paidAt` is
+// the offline queue telling the server when the money ACTUALLY changed
+// hands (spec §4.2). Range-checked in offline-sale.js's resolvePaidAt, not
+// here: "not in the future, not older than 72 hours" is a rule about the
+// server's clock at request time, which a static schema cannot express.
+const markPaidSchema = z.object({
+    paidAt: z.string().max(40).optional(),
 }).passthrough();
 
 // POST /orders/:id/claim
@@ -843,6 +866,7 @@ module.exports = {
     // bodies
     createOrderSchema,
     createIndoorOrderSchema,
+    markPaidSchema,
     claimOrderSchema,
     kitchenStatusSchema,
     kitchenIndoorStatusSchema,

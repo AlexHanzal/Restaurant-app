@@ -14,6 +14,12 @@
 <link rel="stylesheet" href="/reservation/css/floorplan.css">
 <!-- This page's own layout -->
 <link rel="stylesheet" href="/reservation/css/inner.css">
+<!-- Offline-first POS (docs/superpowers/specs/2026-08-02-offline-first-pos-
+     design.md §3.2) — makes the till installable on the bar's tablets,
+     which on Android is also what earns durable IndexedDB storage for the
+     unsent-sales queue. -->
+<link rel="manifest" href="/reservation/manifest.json">
+<meta name="theme-color" content="#111111">
 </head>
 <body>
 
@@ -54,6 +60,14 @@
     <h1><span class="eyebrow">Interní</span> Správa stolů</h1>
     <div class="inn-topbar-meta">
         <span><span class="inn-conn-dot" id="connDot"></span><span id="connText">Připojování…</span></span>
+        <!-- Offline POS status (spec §3.4). Deliberately a button, not a
+             passive badge: when there are unsent sales the barman must be
+             able to open the list and see WHICH ones, and on a tablet a
+             tappable target is the only affordance that communicates that. -->
+        <button class="inn-pos-pill" id="posStatusPill" type="button" hidden>
+            <span class="inn-pos-pill-dot" aria-hidden="true"></span>
+            <span id="posStatusText">Online</span>
+        </button>
         <span id="loggedInUserText"></span>
         <button class="inn-btn admin-only" id="downloadDataBtn" style="display:none;" title="Stáhne aktuální SQLite databázi (data/app.db) jako zálohu">Stáhnout data</button>
         <button class="inn-btn" id="logoutBtn" style="display:none;">Odhlásit</button>
@@ -320,6 +334,23 @@
 </div>
 
 <!-- ── WAITER: place an order for a table, sent straight to the kitchen ── -->
+<!-- Offline POS queue (spec §3.4). Two lists, deliberately separate: sales
+     still waiting for the network resolve themselves, sales the server
+     REJECTED never will and need a person. Merging them would let a real
+     problem hide behind "it'll sync in a minute". -->
+<div class="inn-modal-overlay" id="posQueueModal">
+    <div class="inn-modal-box" style="width:560px; max-width:92vw; max-height:85vh; overflow-y:auto;">
+        <h3>Neodeslané účtenky</h3>
+        <p class="inn-pos-queue-intro" id="posQueueIntro"></p>
+        <div id="posQueuePending"></div>
+        <div id="posQueueFailed"></div>
+        <div class="inn-modal-actions">
+            <button class="inn-btn" id="posQueueRetryBtn">Zkusit odeslat teď</button>
+            <button class="inn-btn" id="posQueueCloseBtn">Zavřít</button>
+        </div>
+    </div>
+</div>
+
 <div class="inn-modal-overlay" id="waiterOrderModal">
     <div class="inn-modal-box" style="width:520px; max-width:92vw; max-height:85vh; overflow-y:auto;">
         <h3 id="waiterOrderModalTitle">Objednávka — stůl</h3>
@@ -361,6 +392,10 @@
      global FloorPlan object it exposes from renderWaiterView/renderOverview/
      renderLayoutView. -->
 <script src="/reservation/js/floorplan.js"></script>
+<!-- Offline-first POS (spec §3.1/§3.3) — both MUST load before inner.js,
+     which calls into POSDB/POSSync during its own startup. -->
+<script src="/reservation/js/pos-db.js"></script>
+<script src="/reservation/js/pos-sync.js"></script>
 <script src="/reservation/js/inner.js"></script>
 </body>
 </html>

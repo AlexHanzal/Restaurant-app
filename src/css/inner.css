@@ -138,6 +138,103 @@ body {
 }
 .inn-conn-dot.bad { background: var(--danger); }
 
+/* ─── OFFLINE POS STATUS ─────────────────────────────────────────────────
+   Spec 2026-08-02 §3.4. The pill is the only place the barman learns that
+   money has been taken but not yet reported, so it is sized and coloured to
+   be noticed across a bar rather than to sit politely in the toolbar.
+
+   Three states, escalating:
+     (default)  online, nothing owed — muted, easy to ignore
+     .waiting   sales queued, will resolve themselves — warning
+     .stuck     sales the server rejected — danger, needs a person
+
+   Every hover rule has an :active twin: this page runs on floor tablets
+   where hover does not exist, and a control that only acknowledges a touch
+   on desktop reads as broken on a tablet. */
+
+.inn-pos-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--line, #d8d2c8);
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    cursor: pointer;
+    /* Touch target: the toolbar row is short, so the pill grows its hit
+       area downward/upward rather than its visual box. */
+    min-height: 32px;
+}
+
+.inn-pos-pill:hover,
+.inn-pos-pill:active { border-color: currentColor; }
+
+.inn-pos-pill:focus-visible { outline: 2px solid var(--accent, #b4653a); outline-offset: 2px; }
+
+.inn-pos-pill-dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    background: var(--ok);
+}
+
+.inn-pos-pill.waiting {
+    color: var(--warning, #a86a1f);
+    border-color: currentColor;
+    font-weight: 600;
+}
+.inn-pos-pill.waiting .inn-pos-pill-dot { background: currentColor; }
+
+.inn-pos-pill.stuck {
+    color: var(--danger);
+    border-color: currentColor;
+    font-weight: 700;
+}
+.inn-pos-pill.stuck .inn-pos-pill-dot { background: currentColor; }
+
+/* A queue that is stuck must not be possible to tune out. Kept slow and
+   opacity-only — a fast or moving alert next to live order data is a
+   distraction during service, not a warning. */
+@media (prefers-reduced-motion: no-preference) {
+    .inn-pos-pill.stuck .inn-pos-pill-dot {
+        animation: inn-pos-pulse 2s ease-in-out infinite;
+    }
+}
+@keyframes inn-pos-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+
+.inn-pos-queue-intro { margin: 0 0 12px; color: var(--muted, #6b6257); font-size: 0.9rem; }
+
+.inn-pos-queue-group { margin-bottom: 16px; }
+.inn-pos-queue-group h4 { margin: 0 0 8px; font-size: 0.9rem; }
+
+.inn-pos-sale {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--line, #d8d2c8);
+    font-size: 0.9rem;
+}
+.inn-pos-sale-meta { color: var(--muted, #6b6257); font-size: 0.82rem; }
+.inn-pos-sale-error { color: var(--danger); font-size: 0.82rem; }
+.inn-pos-sale-amount { font-weight: 700; white-space: nowrap; }
+
+/* Offline-disabled controls (spec §5). Explicitly reasoned, never silently
+   inert — a button that does nothing when tapped teaches staff to distrust
+   the whole screen. */
+.inn-offline-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 /* ─── LAYOUT ─────────────────────────────────────────────────────────── */
 
 .inn-layout {
