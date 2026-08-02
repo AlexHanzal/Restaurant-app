@@ -264,27 +264,34 @@ function eachLocalDay(since, until) {
 }
 
 // Revenue chart: hourly (24 zero-filled slots) for a 1-day window, daily
-// (one zero-filled bucket per calendar day, oldest first) otherwise.
-// Refunded sales are excluded — this is a money view.
+// (one zero-filled bucket per calendar day, oldest first) otherwise. Each
+// bucket also carries an `orders` count so the per-bar tooltip can show
+// "date, revenue, order count". Refunded sales are excluded from both
+// fields — this is a money view.
 function buildChart(days, since, until, sales) {
     const unit = days === 1 ? "hour" : "day";
     let buckets;
     if (unit === "hour") {
-        buckets = Array.from({ length: 24 }, (_, h) => ({ key: String(h).padStart(2, "0"), revenue: 0 }));
+        buckets = Array.from({ length: 24 }, (_, h) => ({ key: String(h).padStart(2, "0"), revenue: 0, orders: 0 }));
         for (const sale of sales) {
             if (sale.refunded) continue;
-            buckets[sale.at.getHours()].revenue += sale.total;
+            const bucket = buckets[sale.at.getHours()];
+            bucket.revenue += sale.total;
+            bucket.orders += 1;
         }
     } else {
         const map = new Map();
         for (const day of eachLocalDay(since, until)) {
             const key = localDayKey(day);
-            map.set(key, { key, revenue: 0 });
+            map.set(key, { key, revenue: 0, orders: 0 });
         }
         for (const sale of sales) {
             if (sale.refunded) continue;
             const bucket = map.get(localDayKey(sale.at));
-            if (bucket) bucket.revenue += sale.total;
+            if (bucket) {
+                bucket.revenue += sale.total;
+                bucket.orders += 1;
+            }
         }
         buckets = [...map.values()];
     }
@@ -302,9 +309,11 @@ function buildWeekdayPattern(sales, since, until) {
     for (const day of eachLocalDay(since, until)) occurrences[day.getDay()] += 1;
 
     const revenueByDay = new Array(7).fill(0);
+    const ordersByDay = new Array(7).fill(0);
     for (const sale of sales) {
         if (sale.refunded) continue;
         revenueByDay[sale.at.getDay()] += sale.total;
+        ordersByDay[sale.at.getDay()] += 1;
     }
 
     const weekday = [];
@@ -313,7 +322,7 @@ function buildWeekdayPattern(sales, since, until) {
     for (let d = 0; d < 7; d++) {
         if (occurrences[d] === 0) continue;
         const revenue = round2(revenueByDay[d]);
-        weekday.push({ id: d, revenue, occurrences: occurrences[d] });
+        weekday.push({ weekday: d, revenue, orders: ordersByDay[d], occurrences: occurrences[d] });
         if (revenue > 0) {
             const avg = revenue / occurrences[d];
             if (avg > bestAvg) {
@@ -334,18 +343,21 @@ function buildHourPattern(sales) {
     for (const sale of sales) {
         if (sale.refunded) continue;
         const h = sale.at.getHours();
-        map.set(h, (map.get(h) || 0) + sale.total);
+        const existing = map.get(h) || { revenue: 0, orders: 0 };
+        existing.revenue += sale.total;
+        existing.orders += 1;
+        map.set(h, existing);
     }
     const hour = [...map.entries()]
         .sort((a, b) => a[0] - b[0])
-        .map(([id, revenue]) => ({ id, revenue: round2(revenue) }));
+        .map(([h, entry]) => ({ hour: h, revenue: round2(entry.revenue), orders: entry.orders }));
 
     let bestHour = null;
     let bestRevenue = -Infinity;
     for (const entry of hour) {
         if (entry.revenue > bestRevenue) {
             bestRevenue = entry.revenue;
-            bestHour = entry.id;
+            bestHour = entry.hour;
         }
     }
     return { hour, bestHour };

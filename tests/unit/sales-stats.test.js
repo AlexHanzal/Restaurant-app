@@ -272,6 +272,29 @@ test("refunded orders are absent from the chart", () => {
     assert.strictEqual(r.chart.buckets.every(b => b.revenue === 0), true);
 });
 
+test("a chart bucket's orders count matches the number of orders that day", () => {
+    const r = stats.computeSalesStats({
+        orders: [
+            deliveryOrder({ id: "o1", createdAt: at(2026, 7, 2, 10), total: 100 }),
+            deliveryOrder({ id: "o2", createdAt: at(2026, 7, 2, 14), total: 150 }),
+        ],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    const today = r.chart.buckets[6];
+    assert.strictEqual(today.key, "2026-08-02");
+    assert.strictEqual(today.orders, 2, "two orders that day");
+});
+
+test("a refunded order contributes to neither revenue nor orders in its chart bucket", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ paymentStatus: "refunded" })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    const today = r.chart.buckets[6];
+    assert.strictEqual(today.revenue, 0);
+    assert.strictEqual(today.orders, 0);
+});
+
 test("channel split covers all three channels and shares sum to 100", () => {
     const timetable = { data: { "2026-08-01": [ { 12: {
         order: [{ item: "Guláš", qty: 1, price: 100 }], orderTotal: 100, isPaid: true,
@@ -330,6 +353,37 @@ test("bestWeekday is null when there are no sales at all", () => {
     });
     assert.strictEqual(r.patterns.bestWeekday, null);
     assert.strictEqual(r.patterns.bestHour, null);
+});
+
+test("patterns.hour entries expose a numeric hour and an orders count", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ createdAt: at(2026, 7, 2, 13), total: 300 })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    const entry = r.patterns.hour.find(h => h.hour === 13);
+    assert.ok(entry, "hour 13 must be present");
+    assert.strictEqual(typeof entry.hour, "number");
+    assert.strictEqual(entry.orders, 1);
+});
+
+test("patterns.weekday entries expose a numeric weekday and an orders count", () => {
+    // 2026-08-02 is a Sunday (weekday 0) — see the NOW comment at the top.
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ createdAt: at(2026, 7, 2), total: 300 })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    const entry = r.patterns.weekday.find(w => w.weekday === 0);
+    assert.ok(entry, "Sunday (weekday 0) must be present");
+    assert.strictEqual(typeof entry.weekday, "number");
+    assert.strictEqual(entry.orders, 1);
+});
+
+test("bestHour is strictly a number, not a padded string", () => {
+    const r = stats.computeSalesStats({
+        orders: [deliveryOrder({ createdAt: at(2026, 7, 2, 13), total: 300 })],
+        timetables: [], indoorOrders: [], menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(typeof r.patterns.bestHour, "number");
 });
 
 test("refund totals, rate and per-item co-occurrence", () => {
