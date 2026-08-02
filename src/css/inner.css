@@ -2217,3 +2217,154 @@ button.inn-status-pill.paid:hover { background: var(--ok); color: #fff; }
     .inn-detail-actions { flex: 1 1 100%; }
     .inn-detail-actions .inn-btn { flex: 1; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   SALES STATS (Prodeje) — src/js/sales-stats-view.js
+   ──────────────────────────────────────────────────────────────────────
+   Minimal, token-based pass only (go-live Task 7). Design tokens only —
+   --accent, --ok, --danger, --muted, --line, --rule, --panel, --ink,
+   --radius — no new literal colors. Rules (--rule / --line), never
+   shadows, per the Swiss system (spec §4). Task 9 does the full styling
+   pass (grid breakpoints, focus polish) on top of this.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Period switcher — a flush-left tab strip, not filled pills. The active
+   tab is marked by weight plus a 2px accent underline. */
+.inn-stat-tabs {
+    display: flex;
+    gap: 24px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 20px;
+}
+.inn-stat-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 8px 0 10px;
+    font-family: var(--ds-font);
+    font-size: 0.85em;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+}
+.inn-stat-tab.active {
+    color: var(--ink);
+    font-weight: 700;
+    border-bottom-color: var(--accent);
+}
+@media (hover: hover) {
+    .inn-stat-tab:hover { color: var(--ink); }
+}
+.inn-stat-tab:active { color: var(--ink); }
+.inn-stat-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Revenue chart card — the headline. One wide card, no shadow, a 1px rule
+   edge only. */
+.inn-stat-chart-card {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 24px;
+}
+.inn-stat-chart-head {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.inn-stat-chart-total {
+    font-size: 2.4em;
+    font-weight: 800;
+    line-height: 1;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-chart-delta {
+    font-size: 1em;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-chart-delta.up { color: var(--ok); }
+.inn-stat-chart-delta.down { color: var(--danger); }
+.inn-stat-chart-caption {
+    margin: 2px 0 20px;
+    color: var(--muted);
+    font-size: 0.85em;
+}
+.inn-stat-chart-empty {
+    margin: 0;
+    padding: 30px 0;
+    color: var(--muted);
+}
+.inn-stat-chart-bars {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    height: 160px;
+}
+.inn-stat-bar {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.inn-stat-bar-rail {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    background: var(--line);
+    border-radius: 2px 2px 0 0;
+    overflow: hidden;
+}
+.inn-stat-bar-fill {
+    width: 100%;
+    background: var(--accent);
+}
+.inn-stat-bar-label {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 0.68em;
+    text-align: center;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* KPI row — four equal tiles, muted label / big number / Δ% caption. */
+.inn-stat-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.inn-stat-kpi {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+}
+.inn-stat-kpi-label {
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 0.68em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.inn-stat-kpi-value {
+    color: var(--ink);
+    font-size: 1.6em;
+    font-weight: 800;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-kpi-delta {
+    margin-top: 6px;
+    font-size: 0.82em;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+.inn-stat-kpi-delta.up { color: var(--ok); }
+.inn-stat-kpi-delta.down { color: var(--danger); }
+
+.inn-stat-error { color: var(--danger); margin-bottom: 12px; }
