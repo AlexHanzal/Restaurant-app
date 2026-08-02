@@ -55,6 +55,10 @@ const REFUND_REASONS = [
     { id: 'wrong_order', label: 'Chyba objednávky' },
     { id: 'other', label: 'Jiný' },
 ];
+// neverSold groups come back keyed by the raw menu category — map to Czech,
+// falling back to the raw key for any category this map doesn't know about
+// (a new menu section added later degrades gracefully instead of vanishing).
+const NEVER_SOLD_CATEGORY_LABELS = { main: 'Hlavní jídla', side: 'Přílohy', drinks: 'Nápoje', desserts: 'Dezerty' };
 
 const czk = n => `${Math.round(Number(n) || 0).toLocaleString('cs-CZ')} Kč`;
 
@@ -260,6 +264,591 @@ function buildKpiRow(data) {
     return row;
 }
 
+// ── shared rank list (design doc §5.4 / Task 8 step 1) ──────────────────
+//
+// "Rank, name, thin proportional bar behind the row, metric" — used by the
+// three ranking cards AND by the refunds panel's item co-occurrence list
+// (Task 8 step 4), so it lives here once instead of twice. `metric` formats
+// the trailing figure; `valueOf` returns the raw number the bar width is
+// scaled against (bars are relative to THIS list's own max, per card/list,
+// not a global max — see buildRankingCard/buildRefundsPanel callers).
+function buildRankList(items, metric, valueOf) {
+    const max = items.reduce((m, item) => Math.max(m, valueOf(item)), 0);
+    const list = document.createElement('div');
+    list.className = 'inn-stat-rank-list';
+
+    items.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'inn-stat-rank-row';
+
+        const bar = document.createElement('div');
+        bar.className = 'inn-stat-rank-bar';
+        bar.style.width = max > 0 ? `${(valueOf(item) / max) * 100}%` : '0%';
+        row.appendChild(bar);
+
+        const content = document.createElement('div');
+        content.className = 'inn-stat-rank-content';
+        const rank = document.createElement('span');
+        rank.className = 'inn-stat-rank-num';
+        rank.textContent = String(idx + 1);
+        const name = document.createElement('span');
+        name.className = 'inn-stat-rank-name';
+        name.textContent = item.name;
+        const value = document.createElement('span');
+        value.className = 'inn-stat-rank-value';
+        value.textContent = metric(item);
+        content.append(rank, name, value);
+        row.appendChild(content);
+
+        list.appendChild(row);
+    });
+
+    return list;
+}
+
+// ── ranking cards (Task 8 step 1) ────────────────────────────────────────
+
+const RANKING_DEFS = [
+    { key: 'topByCount', title: 'Nejprodávanější' },
+    { key: 'bottomByCount', title: 'Nejméně prodávané' },
+    { key: 'topByRevenue', title: 'Největší tržba' },
+];
+
+function buildRankingCard(def, items) {
+    const card = document.createElement('div');
+    card.className = 'inn-stat-panel inn-stat-rank-card';
+
+    const title = document.createElement('div');
+    title.className = 'inn-stat-panel-title';
+    title.textContent = def.title;
+    card.appendChild(title);
+
+    if (!items || items.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'inn-stat-empty';
+        empty.textContent = 'Zatím žádné prodeje';
+        card.appendChild(empty);
+        return card;
+    }
+
+    const isRevenue = def.key === 'topByRevenue';
+    const metric = isRevenue
+        ? item => czk(item.revenue)
+        : item => `${Number(item.count).toLocaleString('cs-CZ')} ks`;
+    const valueOf = isRevenue ? item => item.revenue : item => item.count;
+
+    card.appendChild(buildRankList(items, metric, valueOf));
+    return card;
+}
+
+function buildRankingsRow(data) {
+    const row = document.createElement('div');
+    row.className = 'inn-stat-rankings-row';
+    const rankings = data.rankings || {};
+    RANKING_DEFS.forEach(def => {
+        row.appendChild(buildRankingCard(def, rankings[def.key]));
+    });
+    return row;
+}
+
+// ── never-sold panel (Task 8 step 2) ─────────────────────────────────────
+
+function buildNeverSoldPanel(data) {
+    const panel = document.createElement('div');
+    panel.className = 'inn-stat-panel';
+
+    const title = document.createElement('div');
+    title.className = 'inn-stat-panel-title';
+    title.textContent = 'Neprodalo se vůbec';
+    panel.appendChild(title);
+
+    const groups = data.neverSold || [];
+    if (groups.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'inn-stat-empty';
+        empty.textContent = 'Všechny položky menu se v tomto období prodaly.';
+        panel.appendChild(empty);
+        return panel;
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'inn-stat-never-sold-groups';
+    groups.forEach(group => {
+        const groupEl = document.createElement('div');
+        groupEl.className = 'inn-stat-never-sold-group';
+
+        const label = document.createElement('div');
+        label.className = 'inn-stat-never-sold-cat';
+        label.textContent = NEVER_SOLD_CATEGORY_LABELS[group.category] || group.category;
+        groupEl.appendChild(label);
+
+        const items = document.createElement('ul');
+        items.className = 'inn-stat-never-sold-items';
+        (group.items || []).forEach(name => {
+            const li = document.createElement('li');
+            li.textContent = name;
+            items.appendChild(li);
+        });
+        groupEl.appendChild(items);
+
+        wrap.appendChild(groupEl);
+    });
+    panel.appendChild(wrap);
+    return panel;
+}
+
+// ── patterns panel (Task 8 step 3) ───────────────────────────────────────
+
+// One labelled proportional bar row per split entry (channel or payment
+// method). `labelFn` maps the neutral server id to Czech. `onsiteNote`, when
+// given, is appended under the "onsite" row only — see the module header
+// note on why that slice needs an explicit "settled at the table, not
+// missing data" label rather than looking like an unexplained gap.
+function buildSplitRows(entries, labelFn, onsiteNote) {
+    const rows = document.createElement('div');
+    rows.className = 'inn-stat-split-rows';
+
+    entries.forEach(entry => {
+        const row = document.createElement('div');
+        row.className = 'inn-stat-split-row';
+
+        const head = document.createElement('div');
+        head.className = 'inn-stat-split-head';
+        const name = document.createElement('span');
+        name.className = 'inn-stat-split-name';
+        name.textContent = labelFn(entry.id);
+        const value = document.createElement('span');
+        value.className = 'inn-stat-split-value';
+        value.textContent = `${czk(entry.revenue)} · ${entry.share.toLocaleString('cs-CZ')} %`;
+        head.append(name, value);
+        row.appendChild(head);
+
+        const rail = document.createElement('div');
+        rail.className = 'inn-stat-split-rail';
+        const fill = document.createElement('div');
+        fill.className = 'inn-stat-split-fill';
+        fill.style.width = `${entry.share}%`;
+        rail.appendChild(fill);
+        row.appendChild(rail);
+
+        if (onsiteNote && entry.id === 'onsite') {
+            const note = document.createElement('p');
+            note.className = 'inn-stat-split-note';
+            note.textContent = onsiteNote;
+            row.appendChild(note);
+        }
+
+        rows.appendChild(row);
+    });
+
+    return rows;
+}
+
+function buildPatternBlock(label, valueText) {
+    const block = document.createElement('div');
+    block.className = 'inn-stat-pattern-block';
+    const l = document.createElement('div');
+    l.className = 'inn-stat-pattern-label';
+    l.textContent = label;
+    const v = document.createElement('div');
+    v.className = 'inn-stat-pattern-value';
+    v.textContent = valueText;
+    block.append(l, v);
+    return block;
+}
+
+function buildSplitBlock(label, entries, labelFn, onsiteNote) {
+    const block = document.createElement('div');
+    block.className = 'inn-stat-pattern-block inn-stat-pattern-split';
+    const l = document.createElement('div');
+    l.className = 'inn-stat-pattern-label';
+    l.textContent = label;
+    block.appendChild(l);
+
+    if (!entries || entries.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'inn-stat-empty';
+        empty.textContent = 'Zatím žádné prodeje';
+        block.appendChild(empty);
+        return block;
+    }
+
+    block.appendChild(buildSplitRows(entries, labelFn, onsiteNote));
+    return block;
+}
+
+function buildPatternsPanel(data) {
+    const panel = document.createElement('div');
+    panel.className = 'inn-stat-panel';
+
+    const title = document.createElement('div');
+    title.className = 'inn-stat-panel-title';
+    title.textContent = 'Vzorce';
+    panel.appendChild(title);
+
+    const patterns = data.patterns || {};
+    const grid = document.createElement('div');
+    grid.className = 'inn-stat-patterns-grid';
+
+    const bestWeekdayText = (patterns.bestWeekday === null || patterns.bestWeekday === undefined)
+        ? '—' : WEEKDAYS[patterns.bestWeekday];
+    const bestHourText = (patterns.bestHour === null || patterns.bestHour === undefined)
+        ? '—' : `${patterns.bestHour}:00`;
+
+    grid.appendChild(buildPatternBlock('Nejsilnější den', bestWeekdayText));
+    grid.appendChild(buildPatternBlock('Nejsilnější hodina', bestHourText));
+    grid.appendChild(buildSplitBlock('Podle kanálu', patterns.channels, id => CHANNEL_LABELS[id] || id));
+    grid.appendChild(buildSplitBlock(
+        'Podle platby', patterns.payments, id => PAYMENT_LABELS[id] || id,
+        // "Onsite" here is genuinely "paid at the table/counter, no card or
+        // online record" — not a data gap — see the module header note.
+        'Uhrazeno na místě / u stolu — nejde o chybějící údaj, jen tyto platby nemají zaznamenanou platební metodu.'
+    ));
+
+    panel.appendChild(grid);
+    return panel;
+}
+
+// ── refunds panel (Task 8 step 4) ────────────────────────────────────────
+
+function refundReasonLabel(id) {
+    if (id === 'none') return 'Bez důvodu';
+    const found = REFUND_REASONS.find(r => r.id === id);
+    return found ? found.label : id;
+}
+
+function renderReasonsList(container, reasons) {
+    container.innerHTML = '';
+    const list = reasons || [];
+    if (list.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'inn-stat-empty';
+        empty.textContent = 'Žádné důvody k zobrazení.';
+        container.appendChild(empty);
+        return;
+    }
+    list.forEach(r => {
+        const row = document.createElement('div');
+        row.className = 'inn-stat-reason-row';
+        const label = document.createElement('span');
+        label.className = 'inn-stat-reason-label';
+        label.textContent = refundReasonLabel(r.id);
+        const count = document.createElement('span');
+        count.className = 'inn-stat-reason-count';
+        count.textContent = String(r.count);
+        row.append(label, count);
+        container.appendChild(row);
+    });
+}
+
+// Moves one order's contribution from `fromId`'s bucket to `toId`'s, in
+// place, then re-sorts highest-first — mirrors buildRefunds()'s server-side
+// sort (src/server/sales-stats.js) so the client-side update after a
+// successful POST reflects the same ordering a refetch would have produced,
+// without actually doing one (brief step 4: "update the reason breakdown
+// without a full refetch").
+function shiftRefundReasonCount(refunds, fromId, toId) {
+    if (fromId === toId) return;
+    const from = refunds.reasons.find(r => r.id === fromId);
+    if (from) {
+        from.count -= 1;
+        if (from.count <= 0) refunds.reasons = refunds.reasons.filter(r => r !== from);
+    }
+    let to = refunds.reasons.find(r => r.id === toId);
+    if (!to) {
+        to = { id: toId, count: 0 };
+        refunds.reasons.push(to);
+    }
+    to.count += 1;
+    refunds.reasons.sort((a, b) => b.count - a.count);
+}
+
+// POSTs the label. Throws with a Czech message on failure so callers can
+// show it via showToast directly. apiFetch (inner.js:108) already attaches
+// the x-csrf-token header for POST and already toasts on 401/403 itself —
+// this only needs to handle the "request went through but the server said
+// no" (400/404) case with its own message.
+async function submitRefundReason(orderId, reason, note) {
+    const res = await apiFetch(`${API_URL}/orders/${orderId}/refund-reason`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason, note }),
+    });
+    if (!res.ok) {
+        let msg = 'Nepodařilo se uložit důvod vrácení.';
+        try {
+            const body = await res.json();
+            if (body && body.error) msg = body.error;
+        } catch (_e) { /* non-JSON error body (e.g. the 401/403 case apiFetch already toasted) */ }
+        throw new Error(msg);
+    }
+}
+
+// One row of the refund orders table. `order.id` is null for a refunded
+// TABLE-channel sale (see collectSales() in sales-stats.js — only delivery
+// orders carry refundReason/refundNote/an orderId the /refund-reason route
+// can look up); the select/note stay visible for those rows so the row is
+// still legible, but disabled, since POSTing would 404 against an order
+// that isn't in the orders collection at all.
+function buildRefundOrderRow(order, refunds, reasonsListEl) {
+    const tr = document.createElement('tr');
+
+    const dateTd = document.createElement('td');
+    const parsed = Date.parse(order.createdAt);
+    dateTd.textContent = Number.isFinite(parsed)
+        ? new Date(parsed).toLocaleString('cs-CZ', { dateStyle: 'short', timeStyle: 'short' })
+        : '—';
+    tr.appendChild(dateTd);
+
+    const totalTd = document.createElement('td');
+    totalTd.textContent = czk(order.total);
+    tr.appendChild(totalTd);
+
+    const itemsTd = document.createElement('td');
+    itemsTd.textContent = (order.itemNames || []).join(', ') || '—';
+    tr.appendChild(itemsTd);
+
+    const reasonTd = document.createElement('td');
+    const select = document.createElement('select');
+    select.className = 'inn-stat-refund-select';
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = 'Vyberte důvod…';
+    select.appendChild(blank);
+    REFUND_REASONS.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.id;
+        opt.textContent = r.label;
+        select.appendChild(opt);
+    });
+    select.value = order.reason || '';
+    reasonTd.appendChild(select);
+    tr.appendChild(reasonTd);
+
+    const noteTd = document.createElement('td');
+    const noteInput = document.createElement('input');
+    noteInput.type = 'text';
+    noteInput.className = 'inn-stat-refund-note';
+    noteInput.maxLength = 200;
+    noteInput.placeholder = 'Poznámka';
+    noteInput.value = order.note || '';
+    noteTd.appendChild(noteInput);
+    tr.appendChild(noteTd);
+
+    const canLabel = order.id != null;
+    if (!canLabel) {
+        select.disabled = true;
+        noteInput.disabled = true;
+        select.title = 'U objednávek k rezervaci stolu nelze důvod vrácení upravit zde.';
+        noteInput.title = select.title;
+        return tr;
+    }
+
+    let previousReason = order.reason || '';
+
+    select.addEventListener('change', async () => {
+        const nextReason = select.value;
+        if (!nextReason) {
+            // The server requires a valid enum reason — a blank selection
+            // is a UI-only "not yet labelled" state, never a submit target.
+            select.value = previousReason;
+            return;
+        }
+        select.disabled = true;
+        noteInput.disabled = true;
+        try {
+            await submitRefundReason(order.id, nextReason, noteInput.value.trim());
+            shiftRefundReasonCount(refunds, previousReason || 'none', nextReason);
+            renderReasonsList(reasonsListEl, refunds.reasons);
+            order.reason = nextReason;
+            previousReason = nextReason;
+            showToast('Důvod vrácení uložen.');
+        } catch (e) {
+            console.error(e);
+            select.value = previousReason;
+            showToast(e.message || 'Nepodařilo se uložit důvod vrácení.', true);
+        } finally {
+            select.disabled = false;
+            noteInput.disabled = false;
+        }
+    });
+
+    // Not spelled out by the brief (which only requires the select to POST),
+    // but the note field would otherwise be write-only dead weight — persist
+    // it too, using whatever reason is already saved. Only reachable once a
+    // reason exists, since the server requires one on every POST.
+    noteInput.addEventListener('change', async () => {
+        if (!previousReason) return;
+        const prevNote = order.note || '';
+        select.disabled = true;
+        noteInput.disabled = true;
+        try {
+            await submitRefundReason(order.id, previousReason, noteInput.value.trim());
+            order.note = noteInput.value.trim() || null;
+            showToast('Poznámka uložena.');
+        } catch (e) {
+            console.error(e);
+            noteInput.value = prevNote;
+            showToast(e.message || 'Nepodařilo se uložit poznámku.', true);
+        } finally {
+            select.disabled = false;
+            noteInput.disabled = false;
+        }
+    });
+
+    return tr;
+}
+
+function buildRefundOrdersTable(refunds, reasonsListEl) {
+    const wrap = document.createElement('div');
+    wrap.className = 'inn-bookings-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'inn-bookings-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>Datum</th><th>Částka</th><th>Položky</th><th>Důvod</th><th>Poznámka</th></tr>';
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    (refunds.orders || []).forEach(order => {
+        tbody.appendChild(buildRefundOrderRow(order, refunds, reasonsListEl));
+    });
+    table.appendChild(tbody);
+
+    wrap.appendChild(table);
+    return wrap;
+}
+
+// Whole panel is hidden (returns null) when refunds.count === 0 — an empty
+// refunds panel would just be noise (brief step 4).
+function buildRefundsPanel(data) {
+    const refunds = data.refunds;
+    if (!refunds || !refunds.count) return null;
+
+    const panel = document.createElement('div');
+    panel.className = 'inn-stat-panel';
+
+    const title = document.createElement('div');
+    title.className = 'inn-stat-panel-title';
+    title.textContent = 'Vrácené platby';
+    panel.appendChild(title);
+
+    const stats = document.createElement('div');
+    stats.className = 'inn-stat-refund-stats';
+    [
+        ['Vráceno celkem', czk(refunds.total)],
+        ['Počet vrácení', Number(refunds.count).toLocaleString('cs-CZ')],
+        ['Podíl na tržbách', `${refunds.rate.toLocaleString('cs-CZ')} %`],
+    ].forEach(([label, value]) => {
+        const stat = document.createElement('div');
+        stat.className = 'inn-stat-refund-stat';
+        const l = document.createElement('div');
+        l.className = 'inn-stat-refund-stat-label';
+        l.textContent = label;
+        const v = document.createElement('div');
+        v.className = 'inn-stat-refund-stat-value';
+        v.textContent = value;
+        stat.append(l, v);
+        stats.appendChild(stat);
+    });
+    panel.appendChild(stats);
+
+    // A GoPay refund is always whole-order, never per-item — this list is
+    // co-occurrence ("how often did this item appear on a refunded order"),
+    // not per-item attribution, and is titled + captioned to say exactly
+    // that so nobody reads it as "these items were refunded".
+    const itemsTitle = document.createElement('div');
+    itemsTitle.className = 'inn-stat-subtitle';
+    itemsTitle.textContent = 'Položky ve vrácených objednávkách';
+    panel.appendChild(itemsTitle);
+
+    const itemsNote = document.createElement('p');
+    itemsNote.className = 'inn-stat-note';
+    itemsNote.textContent = 'Platba se vrací vždy za celou objednávku, nikdy za jednotlivou položku — jde tedy o to, jak často se položka vyskytla ve vrácené objednávce, ne o to, že by byla vrácena samotná položka.';
+    panel.appendChild(itemsNote);
+
+    if ((refunds.topItems || []).length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'inn-stat-empty';
+        empty.textContent = 'Žádné položky k zobrazení.';
+        panel.appendChild(empty);
+    } else {
+        panel.appendChild(buildRankList(refunds.topItems, item => `${item.count}×`, item => item.count));
+    }
+
+    const reasonsTitle = document.createElement('div');
+    reasonsTitle.className = 'inn-stat-subtitle';
+    reasonsTitle.textContent = 'Důvody vrácení';
+    panel.appendChild(reasonsTitle);
+
+    const reasonsListEl = document.createElement('div');
+    reasonsListEl.className = 'inn-stat-reasons-list';
+    renderReasonsList(reasonsListEl, refunds.reasons);
+    panel.appendChild(reasonsListEl);
+
+    const ordersTitle = document.createElement('div');
+    ordersTitle.className = 'inn-stat-subtitle';
+    ordersTitle.textContent = 'Seznam vrácených objednávek';
+    panel.appendChild(ordersTitle);
+
+    panel.appendChild(buildRefundOrdersTable(refunds, reasonsListEl));
+
+    return panel;
+}
+
+// ── item table (Task 8 step 5) ───────────────────────────────────────────
+
+function buildItemsTable(data) {
+    const panel = document.createElement('div');
+    panel.className = 'inn-stat-panel';
+
+    const title = document.createElement('div');
+    title.className = 'inn-stat-panel-title';
+    title.textContent = 'Prodané položky';
+    panel.appendChild(title);
+
+    const caption = document.createElement('p');
+    caption.className = 'inn-stat-note';
+    caption.textContent = 'Počty zahrnují i vrácené objednávky. Tržba je za jednotlivou položku (cena × počet), takže se nemusí shodovat s celkovou tržbou nahoře, která navíc zahrnuje poplatky za dopravu.';
+    panel.appendChild(caption);
+
+    const items = data.items || [];
+    if (items.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'inn-stat-empty';
+        empty.textContent = 'Zatím žádné prodeje v tomto období.';
+        panel.appendChild(empty);
+        return panel;
+    }
+
+    const wrap = document.createElement('div');
+    wrap.className = 'inn-bookings-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'inn-bookings-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML = '<tr><th>#</th><th>Položka</th><th>Prodáno (ks)</th><th>Tržba</th></tr>';
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    items.forEach((item, idx) => {
+        const tr = document.createElement('tr');
+        const rankTd = document.createElement('td');
+        rankTd.textContent = String(idx + 1);
+        const nameTd = document.createElement('td');
+        nameTd.textContent = item.name;
+        const countTd = document.createElement('td');
+        countTd.textContent = Number(item.count || 0).toLocaleString('cs-CZ');
+        const revenueTd = document.createElement('td');
+        revenueTd.textContent = czk(item.revenue);
+        tr.append(rankTd, nameTd, countTd, revenueTd);
+        tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    wrap.appendChild(table);
+    panel.appendChild(wrap);
+    return panel;
+}
+
 // ── view entry point ─────────────────────────────────────────────────────
 
 async function renderSalesView() {
@@ -296,9 +885,12 @@ async function renderSalesView() {
     container.appendChild(buildPeriodSwitcher());
     container.appendChild(buildChartCard(data));
     container.appendChild(buildKpiRow(data));
-
-    // Task 8 appends the rankings / never-sold / patterns / refunds panels
-    // here, still reading from the same `data` this task already fetched.
+    container.appendChild(buildRankingsRow(data));
+    container.appendChild(buildNeverSoldPanel(data));
+    container.appendChild(buildPatternsPanel(data));
+    const refundsPanel = buildRefundsPanel(data);
+    if (refundsPanel) container.appendChild(refundsPanel);
+    container.appendChild(buildItemsTable(data));
 
     await renderReceiptsPanel(container);
 }
