@@ -182,7 +182,9 @@ function sumTotals(sales) {
             itemCount += item.qty;
             const existing = itemsByName.get(item.name) || { name: item.name, count: 0, revenue: 0 };
             existing.count += item.qty;
-            if (!sale.refunded) existing.revenue += item.qty * item.price;
+            // items[] is the "what the kitchen sold" view: count and revenue both gross (including refunded orders).
+            // totals.revenue is the net money view and excludes refunds. These two figures are on different bases by design.
+            existing.revenue += item.qty * item.price;
             itemsByName.set(item.name, existing);
         }
     }

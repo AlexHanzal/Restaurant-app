@@ -58,6 +58,7 @@ test("refunded orders are excluded from money but kept in item counts", () => {
     assert.strictEqual(r.totals.orders, 0);
     assert.strictEqual(r.totals.items, 2, "kitchen still made the dish");
     assert.strictEqual(r.items[0].count, 2);
+    assert.strictEqual(r.items[0].revenue, 240, "per-dish revenue counts refunded sales at gross value");
 });
 
 test("an order exactly at the period start is in; a second before it is out", () => {
