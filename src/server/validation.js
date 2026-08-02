@@ -317,6 +317,14 @@ const claimOrderSchema = z.object({
     driverName: reqStr(150, "Jméno řidiče"),
 });
 
+// POST /orders/:orderId/refund-reason — labels a refund that already
+// happened (see server.js route comment); never creates one.
+const refundReasonSchema = z.object({
+    reason: z.enum(["badly_prepared", "late", "customer_cancelled",
+                    "wrong_order", "other"], { error: "Neplatný důvod" }),
+    note: z.string().max(200, { error: "Poznámka je příliš dlouhá" }).optional(),
+});
+
 // POST /orders/:id/kitchen-status and /indoor-orders/:id/kitchen-status
 const kitchenStatusSchema = z.object({
     status: z.enum(["pending", "completed"], { error: "Neplatný stav" }),
@@ -868,6 +876,7 @@ module.exports = {
     createIndoorOrderSchema,
     markPaidSchema,
     claimOrderSchema,
+    refundReasonSchema,
     kitchenStatusSchema,
     kitchenIndoorStatusSchema,
     kitchenIndoorRemoveSchema,

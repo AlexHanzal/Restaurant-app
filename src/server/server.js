@@ -3700,6 +3700,25 @@ function setupAPIRoutes() {
         res.json({ success: true });
     });
 
+    // Labels a refund that ALREADY happened — it can never create one. Refunds
+    // arrive only as GoPay webhooks (gopay.js's refundPayment() is defined but
+    // never called), so this route moves no money and touches no gateway. The
+    // paymentStatus guard is what enforces that.
+    app.post(`${api}/orders/:orderId/refund-reason`,
+        csrf.requireCsrf, requireAuth,
+        V.validateParams(V.paramsOrderId), V.validate(V.refundReasonSchema),
+        (req, res) => {
+            const order = db.get(COL.orders, req.params.orderId);
+            if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
+            if (order.paymentStatus !== "refunded") {
+                return res.status(400).json({ error: "Objednávka není vrácená" });
+            }
+            order.refundReason = req.body.reason;
+            order.refundNote = (req.body.note || "").trim();
+            db.set(COL.orders, order.id, order);
+            res.json({ success: true, order });
+        });
+
     // ── KITCHEN BOARD ────────────────────────────────────────────────────
     // NOTE: this board includes full delivery order PII (customerName,
     // address, phone) via `delivery`, so — like GET /orders — it requires a
