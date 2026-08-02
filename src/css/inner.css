@@ -2616,6 +2616,18 @@ button.inn-status-pill.paid:hover { background: var(--ok); color: #fff; }
     outline-offset: 1px;
 }
 
+/* Visible caption under a disabled refund row (table-channel refund, no
+   orderId to POST against) — title tooltips don't work on a touch surface,
+   so this carries the explanation instead. */
+.inn-stat-refund-disabled-row td.inn-stat-refund-disabled-note {
+    padding-top: 0;
+    padding-bottom: 10px;
+    border-top: none;
+    color: var(--muted);
+    font-size: 0.78em;
+    line-height: 1.4;
+}
+
 /* Layout: collapse to two columns under 1100px, matching the KPI row and
    ranking cards. Admin targets 1024px and wider — nothing below 900px is
    tuned further. */

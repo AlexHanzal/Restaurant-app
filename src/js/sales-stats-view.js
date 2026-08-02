@@ -38,7 +38,7 @@ const PERIODS = [
 ];
 
 // Server sends neutral channel/payment/reason ids only — every label here is
-// applied client-side. CHANNEL_LABELS / PAYMENT_LABELS / WEEKDAYS /
+// applied client-side. CHANNEL_LABELS / PAYMENT_LABELS / SALES_WEEKDAYS /
 // REFUND_REASONS aren't read yet in this task (they belong to the Task 8
 // panels — rankings, patterns, refunds) but live here now so both tasks share
 // one source of Czech copy instead of two.
@@ -47,7 +47,19 @@ const PAYMENT_LABELS = {
     cash: 'Hotově', card_on_delivery: 'Kartou u řidiče',
     online_card: 'Online', onsite: 'Na místě',
 };
-const WEEKDAYS = ['Neděle', 'Pondělí', 'Úterý', 'Středa', 'Čtvrtek', 'Pátek', 'Sobota'];
+// Named SALES_WEEKDAYS, not WEEKDAYS: this file and inner.js are both loaded
+// as plain classic <script> tags into the same page, so every top-level
+// `const`/`let`/`function` here shares ONE global lexical scope with
+// inner.js. inner.js already declares its own WEEKDAYS (Monday-first, for
+// indexing the timetable day column) — reusing that name here would throw
+// "Identifier 'WEEKDAYS' has already been declared" and silently kill this
+// entire script. Every new top-level name in this file must be unique across
+// both files, which is why this is a distinct name rather than a shared one:
+// this array is intentionally Sunday-first (index 0 = Neděle) because it's
+// indexed by patterns.bestWeekday, which comes straight from JS's
+// Date.getDay() (0 = Sunday) — it is NOT interchangeable with inner.js's
+// Monday-first WEEKDAYS.
+const SALES_WEEKDAYS = ['Neděle', 'Pondělí', 'Úterý', 'Středa', 'Čtvrtek', 'Pátek', 'Sobota'];
 const REFUND_REASONS = [
     { id: 'badly_prepared', label: 'Špatně připravené' },
     { id: 'late', label: 'Pozdě doručené' },
@@ -491,7 +503,7 @@ function buildPatternsPanel(data) {
     grid.className = 'inn-stat-patterns-grid';
 
     const bestWeekdayText = (patterns.bestWeekday === null || patterns.bestWeekday === undefined)
-        ? '—' : WEEKDAYS[patterns.bestWeekday];
+        ? '—' : SALES_WEEKDAYS[patterns.bestWeekday];
     const bestHourText = (patterns.bestHour === null || patterns.bestHour === undefined)
         ? '—' : `${patterns.bestHour}:00`;
 
@@ -589,7 +601,10 @@ async function submitRefundReason(orderId, reason, note) {
 // orders carry refundReason/refundNote/an orderId the /refund-reason route
 // can look up); the select/note stay visible for those rows so the row is
 // still legible, but disabled, since POSTing would 404 against an order
-// that isn't in the orders collection at all.
+// that isn't in the orders collection at all. Returns a plain <tr> for a
+// normal row, or a DocumentFragment (row + visible caption row) for a
+// disabled one — either is valid input to Node.appendChild, so the caller
+// doesn't need to know which it got.
 function buildRefundOrderRow(order, refunds, reasonsListEl) {
     const tr = document.createElement('tr');
 
@@ -639,9 +654,28 @@ function buildRefundOrderRow(order, refunds, reasonsListEl) {
     if (!canLabel) {
         select.disabled = true;
         noteInput.disabled = true;
-        select.title = 'U objednávek k rezervaci stolu nelze důvod vrácení upravit zde.';
-        noteInput.title = select.title;
-        return tr;
+        // title alone is undiscoverable on the floor tablet (no hover, and
+        // disabled controls aren't keyboard-focusable) — a visible caption
+        // row underneath carries the explanation instead, matching the
+        // "Na místě" payment note pattern at buildSplitRows() above. title
+        // stays too, for anyone who is hovering with a mouse.
+        const explanation = 'U objednávek k rezervaci stolu nelze důvod vrácení upravit zde.';
+        select.title = explanation;
+        noteInput.title = explanation;
+
+        const frag = document.createDocumentFragment();
+        frag.appendChild(tr);
+
+        const noteRow = document.createElement('tr');
+        noteRow.className = 'inn-stat-refund-disabled-row';
+        const noteTd = document.createElement('td');
+        noteTd.colSpan = 5;
+        noteTd.className = 'inn-stat-refund-disabled-note';
+        noteTd.textContent = explanation;
+        noteRow.appendChild(noteTd);
+        frag.appendChild(noteRow);
+
+        return frag;
     }
 
     let previousReason = order.reason || '';

@@ -472,7 +472,17 @@ function computeSalesStats({ orders, timetables, indoorOrders, menu, days, now }
     const payments = buildSplit(currentSales, sale => sale.paymentMethod);
     const refunds = buildRefunds(currentSales, current.revenue);
 
-    const deltaOf = (cur, prev) => (prev === 0 || prev === null ? null : round1(((cur - prev) / prev) * 100));
+    // null on either side means "no comparison" (data missing/undefined), NOT
+    // "compare against zero" — a null `cur` (e.g. avgOrder when the current
+    // period had zero orders) previously coerced to 0 in the subtraction and
+    // reported a fabricated -100% next to a KPI tile that correctly showed
+    // "—". revenue/orders/items are never null in practice (sumTotals always
+    // returns numbers for them, even 0), but the null guard is applied to
+    // every field here for one consistent, defensive rule rather than a
+    // special case that only avgOrder gets.
+    const deltaOf = (cur, prev) => (
+        cur === null || prev === null || prev === 0 ? null : round1(((cur - prev) / prev) * 100)
+    );
 
     return {
         days,

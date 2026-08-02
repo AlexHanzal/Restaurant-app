@@ -122,6 +122,21 @@ test("deltas.avgOrder is null when the previous period has no orders", () => {
     assert.strictEqual(r.deltas.avgOrder, null);
 });
 
+test("deltas.avgOrder is null when the CURRENT period has no orders, even against a non-empty previous period", () => {
+    // Regression for a fabricated -100%: null avgOrder used to coerce to 0
+    // in the delta subtraction, so a current period with zero orders against
+    // a non-empty previous period reported a real-looking -100% drop right
+    // next to a KPI tile that correctly showed "—" for the value itself.
+    const prev = deliveryOrder({ id: "p1", createdAt: at(2026, 6, 22), total: 200 });
+    const r = stats.computeSalesStats({
+        orders: [prev], timetables: [], indoorOrders: [],
+        menu: {}, days: 7, now: NOW,
+    });
+    assert.strictEqual(r.totals.avgOrder, null, "current period has no orders");
+    assert.strictEqual(r.previous.avgOrder, 200, "previous period is non-empty");
+    assert.strictEqual(r.deltas.avgOrder, null);
+});
+
 test("items come back sorted by count descending", () => {
     const r = stats.computeSalesStats({
         orders: [deliveryOrder({
