@@ -100,10 +100,20 @@ const smsPhoneLimiter = rateLimit({
 // someone who photographed a real QR code, or a guest firing orders from
 // home. These two limiters are what caps the damage in that case.
 
-// Backstop across all the public table routes.
+// Backstop on the work every public table route pays BEFORE it knows the
+// token is real — the db.list(timetables) scan inside resolveTableToken().
+// That is the only thing an IP budget can usefully bound here.
+//
+// Sized for a VENUE, not for a person. Every guest in the dining room reaches
+// this server from the restaurant's single NAT address, so a per-IP number
+// tight enough to constrain one attacker is an outage for the room: at 30 the
+// first guest's status screen (up to 60 polls a window, see
+// tableStatusLimiter) exhausted the allowance for everyone, and the next
+// person to scan a QR code could not even load the menu. This must only ever
+// stop a script; the real per-guest limits are the table-keyed ones below.
 const tableOrderIpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 30,
+    limit: 600,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
@@ -126,6 +136,33 @@ const tableOrderTableLimiter = rateLimit({
     legacyHeaders: false,
     keyGenerator: (req) => req.tableFileId || "unresolved-table",
     message: { error: "Z tohoto stolu přišlo příliš mnoho objednávek. Obraťte se prosím na obsluhu." },
+});
+
+// Status polling (GET /table-orders/:id/status), keyed on the resolved table
+// for the same reason the order limiter above is — and specifically NOT on
+// the IP. This is the highest-volume traffic these routes see: a guest's
+// status screen polls for the whole time their food is being cooked, which is
+// up to 60 requests a window on its own. An IP budget that survives a full
+// dining room is therefore no limit at all for one attacker, and one tight
+// enough for a single phone cuts off the second guest to sit down. The table
+// is the only key on which "too much" has a meaningful value.
+//
+// Budget: the client escalates 15s -> 30s -> 60s as the wait grows
+// (STATUS_POLL_STEPS in src/js/table-order.js), so one screen costs ~31 a
+// window. 240 leaves room for four order screens open at one table, plus
+// refreshes and the extra immediate poll each tab-focus fires — while still
+// bounding a photographed QR code to something a real table cannot exceed.
+//
+// MOUNTING CONTRACT: identical to tableOrderTableLimiter above — this must
+// run AFTER the middleware that verifies the token and assigns
+// req.tableFileId, or keyGenerator collapses every table onto one bucket.
+const tableStatusLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.tableFileId || "unresolved-table",
+    message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
 });
 
 // ── PER-ACCOUNT LOCKOUT (in-memory, cross-IP) ───────────────────────────
@@ -241,6 +278,7 @@ module.exports = {
     smsPhoneLimiter,
     tableOrderIpLimiter,
     tableOrderTableLimiter,
+    tableStatusLimiter,
     isAccountLocked,
     recordFailedLogin,
     clearFailedLogins,

@@ -398,3 +398,83 @@ describe("table QR self-order — per-table order limiter", () => {
         );
     });
 });
+
+// ============================================================================
+// SUITE 3 — status-poll budget, its own server (see file header)
+//
+// The guest's status screen polls while it waits for food, which is by far
+// the highest-volume traffic these public routes see — and the one thing the
+// original 30-req/15min per-IP limiter could not accommodate. Its own server
+// for the same reason suite 2 has one: proving the budget holds takes more
+// requests than the other suites should have to budget around.
+// ============================================================================
+
+describe("table QR self-order — status poll budget", () => {
+    let h;
+    let tokenE, tokenF;
+    let orderId;
+
+    before(async () => {
+        h = await harness.start();
+        seedTable(h.dbPath, "tableEId0005", "Stůl E");
+        seedTable(h.dbPath, "tableFId0006", "Stůl F");
+        seedMenu(h.dbPath);
+        seedTableOrderingSettings(h.dbPath, { enabled: true, days: daysAllOpen("00:00", "23:59") });
+        tokenE = tableToken.mintTableToken("tableEId0005");
+        tokenF = tableToken.mintTableToken("tableFId0006");
+
+        const res = await postJson(`${h.api}/table-orders`, {
+            token: tokenE,
+            items: [{ id: DISH_ID, qty: 1 }],
+        });
+        if (res.status !== 200) {
+            assert.fail(`fixture order failed: ${res.status} ${await res.text()}`);
+        }
+        orderId = (await res.json()).orderId;
+    });
+
+    after(async () => {
+        await h.stop();
+    });
+
+    // REGRESSION GUARD — poll budget. The status screen polls every 15s
+    // (STATUS_POLL_STEPS in src/js/table-order.js), so ONE waiting guest is
+    // up to 60 requests inside a single 15-minute rate-limit window. While
+    // every table route shared one 30-req/15min per-IP limiter, that guest
+    // was cut off after ~7.5 minutes and their screen silently froze on the
+    // last status it managed to read (pollOrderStatus treats a non-404 as
+    // transient and keeps the previous label), so "Hotovo" never arrived.
+    //
+    // 60 is deliberately the un-backed-off worst case: this must keep
+    // passing even if the client's escalating cadence is ever reverted.
+    test("60 consecutive status polls for one order all succeed", async () => {
+        const statuses = [];
+        for (let i = 0; i < 60; i++) {
+            const res = await fetch(`${h.api}/table-orders/${orderId}/status?token=${tokenE}`);
+            statuses.push(res.status);
+            await res.arrayBuffer(); // drain the body so the socket is reused
+        }
+
+        assert.deepStrictEqual(
+            statuses.filter(s => s !== 200), [],
+            `expected 60 successful polls, got: ${JSON.stringify(statuses)}`
+        );
+    });
+
+    // REGRESSION GUARD — shared NAT address. Every guest in the dining room
+    // reaches the server from the venue's single public IP, so an IP-keyed
+    // budget is a budget for the whole room. Runs AFTER the 60 polls above
+    // deliberately: with per-IP limiting those polls exhausted the shared
+    // allowance, and the next guest to scan a QR code at a DIFFERENT table
+    // could not even load the menu. The limiter must key on the resolved
+    // table, so one table's traffic can never starve another's.
+    test("a second table can still open a session after a neighbour used its whole poll budget", async () => {
+        const res = await fetch(`${h.api}/table-session/${tokenF}`);
+        if (res.status !== 200) {
+            assert.fail(`neighbouring table was rate-limited: ${res.status} ${await res.text()}`);
+        }
+        const body = await res.json();
+        assert.strictEqual(body.tableName, "Stůl F");
+        assert.strictEqual(body.ordering.open, true);
+    });
+});

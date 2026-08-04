@@ -74,6 +74,15 @@
     let statusPollHandle = null;
     let statusOrderId = null;
     let statusPollInFlight = false;
+    // The poll chain is a setTimeout that reschedules itself (the cadence
+    // stretches as the wait grows — see STATUS_POLL_STEPS), so "are we
+    // polling?" cannot be read off the handle alone: pollOrderStatus() may
+    // stop the chain from inside the very tick that is about to reschedule
+    // it. This flag is what scheduleNextPoll() checks.
+    let statusPollingActive = false;
+    let statusPollStartedAt = 0;
+    let statusRateLimitedUntil = 0;
+    let hasWarnedRateLimited = false;
 
     // ── UTIL ─────────────────────────────────────────────────────────────
 
@@ -973,11 +982,36 @@
         }
     }
 
-    // ── STATUS SCREEN — poll every 15s, map kitchenStatus, stop on
-    // completed, pause while the tab is hidden (guest's battery — spec
-    // §8.2 step 5). ────────────────────────────────────────────────────
+    // ── STATUS SCREEN — poll while the food is being made, map
+    // kitchenStatus, stop on completed, pause while the tab is hidden
+    // (guest's battery — spec §8.2 step 5). ─────────────────────────────
 
-    const STATUS_POLL_INTERVAL_MS = 15000;
+    // The cadence stretches as the wait grows. The first minutes are when
+    // the guest is actually watching the screen; past that a slower tick is
+    // indistinguishable to them, and it is the difference between ~31 and 60
+    // requests inside one 15-minute rate-limit window. tableStatusLimiter in
+    // src/server/security.js is budgeted off these exact numbers — change
+    // one and re-read the other.
+    //
+    // Ordered longest-wait-first so the first match wins.
+    const STATUS_POLL_STEPS = [
+        { afterMs: 10 * 60 * 1000, everyMs: 60000 },
+        { afterMs: 3 * 60 * 1000, everyMs: 30000 },
+        { afterMs: 0, everyMs: 15000 },
+    ];
+    const SLOWEST_POLL_MS = STATUS_POLL_STEPS[0].everyMs;
+
+    // How long a 429 pins us to the slowest cadence. Comfortably shorter
+    // than the limiter's own 15-minute window, so a guest whose table frees
+    // up budget again recovers without waiting the whole window out.
+    const RATE_LIMIT_BACKOFF_MS = 2 * 60 * 1000;
+
+    function pollIntervalFor(elapsedMs) {
+        for (const step of STATUS_POLL_STEPS) {
+            if (elapsedMs >= step.afterMs) return step.everyMs;
+        }
+        return SLOWEST_POLL_MS;
+    }
 
     // The board only ever writes "pending" or "completed" to kitchenStatus
     // (see src/server/validation.js's kitchenStatusSchema) — there is no
@@ -1020,6 +1054,20 @@
                     clearOrderSession();
                     stopStatusPolling();
                     showErrorScreen('Tuto objednávku se nepodařilo najít. Obraťte se prosím na obsluhu.');
+                    return;
+                }
+                // 429 — this table's poll budget is spent (tableStatusLimiter,
+                // src/server/security.js). Back off to the slowest cadence
+                // and say so once. Silence would be worse than it sounds:
+                // the branch below keeps the last status on screen forever,
+                // so a rate-limited guest sits watching "Připravuje se" while
+                // their food goes cold on the pass.
+                if (res.status === 429) {
+                    statusRateLimitedUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
+                    if (!hasWarnedRateLimited) {
+                        hasWarnedRateLimited = true;
+                        window.showToast('Stav objednávky se teď obnovuje pomaleji.', false);
+                    }
                 }
                 return; // transient failure — keep the last known status on screen, try again next tick
             }
@@ -1038,21 +1086,41 @@
         }
     }
 
+    // One tick, then book the next one. A self-rescheduling timeout rather
+    // than setInterval because the gap between ticks is not constant — it
+    // depends on how long this order has been waiting.
+    function scheduleNextPoll() {
+        if (!statusPollingActive || !statusOrderId) return;
+
+        let delay = pollIntervalFor(Date.now() - statusPollStartedAt);
+        if (Date.now() < statusRateLimitedUntil) delay = Math.max(delay, SLOWEST_POLL_MS);
+
+        statusPollHandle = setTimeout(async () => {
+            statusPollHandle = null;
+            await pollOrderStatus();
+            // pollOrderStatus may have ended the chain from inside that
+            // await (order completed, or the order/table stopped resolving)
+            // — the guard at the top is what catches it.
+            scheduleNextPoll();
+        }, delay);
+    }
+
     function startStatusPolling() {
         stopStatusPolling();
+        statusPollingActive = true;
+        statusPollStartedAt = Date.now();
         renderStatus(null); // optimistic "Přijato" the instant the status screen appears
         pollOrderStatus();
-        // Only actually runs while the tab is visible — see the
-        // visibilitychange handler below, which starts/stops this same
-        // interval rather than letting it tick uselessly in the
-        // background and drain a guest's phone battery.
-        if (document.visibilityState !== 'hidden') {
-            statusPollHandle = setInterval(pollOrderStatus, STATUS_POLL_INTERVAL_MS);
-        }
+        // Only actually ticks while the tab is visible — see the
+        // visibilitychange handler below, which stops/restarts this same
+        // chain rather than letting it run uselessly in the background and
+        // drain a guest's phone battery.
+        if (document.visibilityState !== 'hidden') scheduleNextPoll();
     }
 
     function stopStatusPolling() {
-        if (statusPollHandle) clearInterval(statusPollHandle);
+        statusPollingActive = false;
+        if (statusPollHandle) clearTimeout(statusPollHandle);
         statusPollHandle = null;
     }
 
@@ -1066,10 +1134,17 @@
         } else {
             // Resume immediately with a fresh check (the kitchen may have
             // finished while the guest's screen was off), then resume the
-            // regular interval.
-            pollOrderStatus();
+            // regular cadence.
+            //
+            // statusPollStartedAt is deliberately NOT reset here: the
+            // cadence tracks how long the food has been waited on, not how
+            // long this tab has been in the foreground. A guest who pockets
+            // their phone for twenty minutes and looks again should come
+            // back to the slow tick, not restart the fast one.
             stopStatusPolling();
-            statusPollHandle = setInterval(pollOrderStatus, STATUS_POLL_INTERVAL_MS);
+            statusPollingActive = true;
+            pollOrderStatus();
+            scheduleNextPoll();
         }
     });
 

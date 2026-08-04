@@ -4143,13 +4143,15 @@ function setupAPIRoutes() {
     // so there is nothing for an attacker to ride. What guards these routes
     // instead is the signed token + the rate limiters + the settings gate.
 
-    // Resolves :token (params) or body.token to a live table record and
-    // hangs the result on the request. Runs BEFORE tableOrderTableLimiter,
-    // which keys on req.tableFileId — see that limiter's mounting contract
-    // in security.js.
+    // Resolves :token (params), body.token or ?token= (query) to a live table
+    // record and hangs the result on the request. Runs BEFORE
+    // tableOrderTableLimiter and tableStatusLimiter, both of which key on
+    // req.tableFileId — see those limiters' mounting contract in security.js.
     function resolveTableToken(source) {
         return (req, res, next) => {
-            const raw = source === "body" ? (req.body || {}).token : req.params.token;
+            const raw = source === "body" ? (req.body || {}).token
+                : source === "query" ? (req.query || {}).token
+                : req.params.token;
             const fileId = tableToken.verifyTableToken(raw);
             // 404, not 403: a bad signature must be indistinguishable from
             // a URL that was never valid. Telling an attacker "the signature
@@ -4285,21 +4287,24 @@ function setupAPIRoutes() {
     //
     // Polled, not SSE: GET /api/events/board sits behind requireAuth and
     // must stay there.
+    //
+    // The token is resolved by resolveTableToken("query") rather than inline
+    // so tableStatusLimiter can key on the resolved table (its mounting
+    // contract — see security.js). That ordering is load-bearing, not
+    // cosmetic: this route is the busiest of the three by an order of
+    // magnitude, and while it sat behind the per-IP limiter one guest's poll
+    // loop exhausted the whole venue's shared NAT budget in ~7 minutes.
     app.get(
         `${api}/table-orders/:id/status`,
         security.tableOrderIpLimiter,
         V.validateParams(V.paramsId),
+        resolveTableToken("query"),
+        security.tableStatusLimiter,
         (req, res) => {
-            const fileId = tableToken.verifyTableToken(req.query.token);
-            if (!fileId) return res.status(404).json({ error: "Neplatný kód stolu" });
-
-            const table = db.list(COL.timetables).find(t => t.fileId === fileId);
-            if (!table) return res.status(410).json({ error: "Tento stůl už neexistuje" });
-
             const order = db.get(COL.indoorOrders, req.params.id);
             // Same 404 for "no such order" and "someone else's order" — the
             // distinction is exactly what an enumerator would want.
-            if (!order || order.tableName !== table.className) {
+            if (!order || order.tableName !== req.tableRecord.className) {
                 return res.status(404).json({ error: "Objednávka nenalezena" });
             }
 
