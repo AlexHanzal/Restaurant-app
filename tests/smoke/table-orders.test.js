@@ -292,6 +292,23 @@ describe("table QR self-order — public routes", () => {
         assert.strictEqual(row.total, DISH_PRICE * 2);
         assert.strictEqual(row.kitchenStatus, "pending");
         assert.strictEqual(row.paymentStatus, "unpaid");
+
+        // REGRESSION GUARD — cart shape. This app has two cart line shapes
+        // (validation.js:243): delivery lines carry `name`, indoor and
+        // reservation lines carry `item`. priceOrderItems() passes client
+        // fields through, so a guest page reusing the delivery-shaped cart
+        // produced lines with NO `item` key — and every indoor consumer
+        // reads exactly that. The live symptom was a kitchen ticket reading
+        // "2× 298 Kč" with no dish name at all, which a cook cannot make,
+        // plus "2× undefined" in the admin walk-in row. Normalised in
+        // POST /table-orders; asserted here so it cannot silently return.
+        for (const line of row.items) {
+            assert.ok(
+                line.item,
+                `indoor order line is missing the \`item\` key the kitchen board renders: ${JSON.stringify(line)}`
+            );
+            assert.strictEqual(line.item, line.name);
+        }
     });
 
     test("POST /table-orders — a client-supplied `total` is rejected 400 (schema is strict)", async () => {

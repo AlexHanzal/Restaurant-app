@@ -4218,13 +4218,36 @@ function setupAPIRoutes() {
             const priced = priceOrderItems(items);
             if (priced.error) return res.status(400).json({ error: priced.error });
 
+            // CART SHAPE NORMALISATION — do not remove.
+            //
+            // This app has TWO cart line shapes (documented at
+            // validation.js:243): delivery lines carry `name`, indoor and
+            // reservation lines carry `item`. priceOrderItems() re-derives
+            // price/name but PASSES CLIENT FIELDS THROUGH, so whichever key
+            // the client sent is the one that survives.
+            //
+            // The waiter's picker (inner.js) sends `item`, so staff orders
+            // land with it. The guest page reuses the delivery-shaped cart
+            // (`id`/`name`) — so without this map a QR order reaches the
+            // kitchen ticket as "2× " with NO DISH NAME (kitchen.js renders
+            // `item.item`, and server.js's own /kitchen/orders normaliser
+            // reads `i.item` too), and the admin walk-in row as
+            // "2× undefined". Caught in live testing; a cook literally
+            // cannot make that order.
+            //
+            // Normalised HERE rather than in the client, because the server
+            // is the authority on what an indoor order looks like and every
+            // existing consumer already reads `item` — one map fixes the
+            // kitchen board, the admin overview and anything added later.
+            const normalisedItems = priced.items.map(i => ({ ...i, item: i.item || i.name }));
+
             const id = generateFileId();
             const order = {
                 id,
                 tableName: req.tableRecord.className,
                 guestName: (guestName || "").trim(),
                 note: (note || "").trim(),
-                items: priced.items,
+                items: normalisedItems,
                 total: priced.total,
                 kitchenStatus: "pending",
                 createdAt: new Date().toISOString(),
