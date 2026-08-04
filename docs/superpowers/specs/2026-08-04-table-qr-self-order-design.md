@@ -352,9 +352,12 @@ EET integration test), so a minimal one is built as part of this work:
 Cases: invalid token → 404; deleted table → 410; `tableOrdering.enabled: false`
 → 403; outside hours → 403; happy path creates a row visible in
 `GET /indoor-orders` with `source: "qr"` and a server-derived total; a
-client-supplied `total` or `offlineSale: true` in the body is **ignored** (the
-price comes from the menu); the status route refuses a foreign table's token;
-the per-table limiter trips after its threshold.
+client-supplied `total` or `offlineSale: true` in the body is **rejected with
+400** — `tableOrderSchema` is `.strict()`, unlike `createIndoorOrderSchema`'s
+`.passthrough()`, because a guest phone is never an offline POS and refusing a
+client price outright is more legible to a future reader than silently dropping
+it; the status route refuses a foreign table's token; the per-table limiter
+trips after its threshold.
 
 ### 9.3 Live
 
