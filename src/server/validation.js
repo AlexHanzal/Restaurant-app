@@ -228,6 +228,11 @@ function freeTextNameParam(paramName, max = 200) {
 const paramsName = freeTextNameParam("name");
 const paramsFileId = systemIdParam("fileId");
 const paramsId = systemIdParam("id");
+// The QR token is "<fileId>.<base64url sig>" — base64url plus one dot. This
+// is the shape gate only; table-token.js's HMAC check is the real one.
+const paramsTableToken = z.object({
+    token: z.string().min(3).max(200).regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/, "Neplatný kód stolu"),
+});
 const paramsReceiptId = systemIdParam("receiptId", 80);
 const paramsOrderId = systemIdParam("orderId");
 const paramsGatewayTxId = systemIdParam("gatewayTransactionId", 150);
@@ -299,6 +304,23 @@ const createIndoorOrderSchema = z.object({
     offlineSale: z.boolean().optional(),
     total: z.number().optional(),
 }).passthrough();
+
+// POST /table-orders — the customer-facing QR self-order route (spec
+// 2026-08-04 §5.3).
+//
+// Deliberately NOT .passthrough() like createIndoorOrderSchema: that route
+// is staff-authenticated and carries offline-POS fields; this one takes
+// anonymous input from a stranger's phone, so the accepted surface is
+// exactly these four keys and nothing else. In particular `total` and
+// `offlineSale` are REJECTED here rather than ignored — a guest device is
+// never an offline POS, and silently dropping a client-supplied price is
+// less obvious to a future reader than refusing it outright.
+const tableOrderSchema = z.object({
+    token: reqStr(200, "Kód stolu"),
+    guestName: optStr(150, "Jméno"),
+    note: optStr(500, "Poznámka"),
+    items: itemsArraySchema,
+}).strict();
 
 // POST /indoor-orders/:id/mark-paid
 //
@@ -793,6 +815,14 @@ const settingsSchema = z.object({
         pscWhitelist: pscWhitelistSchema,
         etaMinutes: boundedInt(1, 600, "Doba doručení (min)"),
     }).strict(),
+    // Customer QR self-order (spec 2026-08-04 §7). MUST be declared here or
+    // PUT /settings 400s the moment the admin panel sends back the object it
+    // just fetched — same persistence hazard as floorplanSchema below.
+    // Reuses deliveryDaysSchema: the shapes are identical on purpose.
+    tableOrdering: z.object({
+        enabled: z.coerce.boolean(),
+        days: deliveryDaysSchema,
+    }).strict(),
     closedDays: closedDaysSchema,
     dailyMenu: z.object({
         enabled: z.coerce.boolean(),
@@ -868,12 +898,14 @@ module.exports = {
     paramsReceiptId,
     paramsOrderId,
     paramsGatewayTxId,
+    paramsTableToken,
     systemIdParam,
     freeTextNameParam,
 
     // bodies
     createOrderSchema,
     createIndoorOrderSchema,
+    tableOrderSchema,
     markPaidSchema,
     claimOrderSchema,
     refundReasonSchema,

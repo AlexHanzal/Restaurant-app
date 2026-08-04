@@ -95,6 +95,39 @@ const smsPhoneLimiter = rateLimit({
     message: { error: "Příliš mnoho žádostí o SMS kód pro toto telefonní číslo. Zkuste to prosím později." },
 });
 
+// ── TABLE QR SELF-ORDER LIMITERS ────────────────────────────────────────
+// Spec 2026-08-04 §6. The signed token stops URL guessing but CANNOT stop
+// someone who photographed a real QR code, or a guest firing orders from
+// home. These two limiters are what caps the damage in that case.
+
+// Backstop across all the public table routes.
+const tableOrderIpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
+});
+
+// THE ONE THAT MATTERS. Keyed on the RESOLVED table (req.tableFileId, set by
+// the route's token-verification step), not on the IP — a leaked QR code
+// photo is abused from many phones, which per-IP limiting does not see. A
+// real table cannot plausibly place more than a dozen separate orders in a
+// quarter of an hour.
+//
+// MOUNTING CONTRACT: this must run AFTER the middleware that verifies the
+// token and assigns req.tableFileId. If it ever runs first, keyGenerator
+// falls back to the IP and the protection silently degrades — hence the
+// explicit marker rather than a silent `|| req.ip`.
+const tableOrderTableLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 12,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.tableFileId || "unresolved-table",
+    message: { error: "Z tohoto stolu přišlo příliš mnoho objednávek. Obraťte se prosím na obsluhu." },
+});
+
 // ── PER-ACCOUNT LOCKOUT (in-memory, cross-IP) ───────────────────────────
 //
 // Keyed by "scope:identifier" (scope = "user" | "driver", identifier =
@@ -206,6 +239,8 @@ module.exports = {
     loginLimiter,
     smsIpLimiter,
     smsPhoneLimiter,
+    tableOrderIpLimiter,
+    tableOrderTableLimiter,
     isAccountLocked,
     recordFailedLogin,
     clearFailedLogins,

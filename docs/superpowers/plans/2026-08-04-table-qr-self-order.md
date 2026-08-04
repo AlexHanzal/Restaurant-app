@@ -554,6 +554,29 @@ In `POST ${api}/indoor-orders` (~line 3951), add one field to the `order` object
             source: "staff",
 ```
 
+- [ ] **Step 2b: Pass `note` and `source` through the kitchen normalizer**
+
+> **Gap found during execution.** `GET ${api}/kitchen/orders` (~line 3731) does
+> **not** hand `indoor_orders` rows to the client as-is — it builds an explicit
+> normalized object field by field, and that object lists neither `note` nor
+> `source`. Without this step the guest's note is collected and silently
+> dropped, and Task 6's QR badge can never appear no matter how it is written.
+
+In the `for (const o of db.list(COL.indoorOrders))` loop, add to the pushed object:
+
+```js
+                    note: o.note || "",
+                    // Absent on every row written before the QR self-order
+                    // feature — normalised to "staff" here so the kitchen
+                    // board's badge logic has one shape to reason about
+                    // rather than a tri-state.
+                    source: o.source || "staff",
+```
+
+`note` is safe to surface immediately: `kitchen.js:335` already renders a
+`.kit-ticket__note` element for delivery cards, so the class exists and Task 6
+only has to reuse it on indoor cards.
+
 - [ ] **Step 3: Add the token-resolution middleware and the four public routes**
 
 Add a new section immediately after the `// ── INDOOR ORDERS (staff-placed) ──` block ends (after the `DELETE ${api}/indoor-orders/:id` route, ~line 4090):
@@ -1032,13 +1055,27 @@ In the Nastavení view, next to the delivery hours table, add an *Objednávky u 
 
 > The settings panel PUTs back the whole object it GET-ed, so this section only needs to read and write `settings.tableOrdering`; Task 2 already taught the schema to accept it.
 
-- [ ] **Step 5: QR badges**
+- [ ] **Step 5: QR badges and the guest note**
 
 `src/js/kitchen.js`, in `renderIndoorCard()` (~line 249): add a `QR` badge next to `kit-ticket__source` when `order.source === 'qr'`. Style it in `kitchen-page.css`.
 
 `src/js/inner.js`, in `renderWalkinOrderRow()` (~line 1294): same badge.
 
 Both guard on `order.source === 'qr'` explicitly — rows predating this feature have **no** `source` field and must render exactly as they do today.
+
+**Also render the guest's note on indoor kitchen cards.** `renderIndoorCard()`
+currently drops it entirely; `renderDeliveryCard()` already renders one at
+`kitchen.js:335`. Reuse that exact markup so the two ticket types stay
+consistent and no new CSS is needed:
+
+```js
+        ${order.note ? `<div class="kit-ticket__note">Poznámka: ${escapeHtml(order.note)}</div>` : ''}
+```
+
+A guest note that the cook never sees is worse than no note field at all — this
+is not optional polish. Task 3 Step 2b makes `note` and `source` available on
+the board payload; if either is `undefined` at runtime, that step was missed —
+report it rather than working around it client-side.
 
 - [ ] **Step 6: Verify by hand**
 

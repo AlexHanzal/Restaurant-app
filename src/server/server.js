@@ -169,6 +169,9 @@ const reorder = require("./reorder");
 // (audit 2026-07-29, findings F4 and F5).
 const { safeReturnUrl } = require("./urlsafe");
 const smscap = require("./smscap");
+// Signed per-table capability tokens for the customer QR self-order page —
+// see table-token.js's header for why this is NOT auth.js's JWT_SECRET.
+const tableToken = require("./table-token");
 const {
     hashPassword,
     comparePassword,
@@ -2243,7 +2246,13 @@ function collectIndoorOrderEvents(timetableData) {
                     guestName: run.slot.content || "",
                     order: run.slot.order,
                     orderTotal: run.slot.orderTotal,
-                    kitchenStatus: run.slot.kitchenStatus || "pending"
+                    kitchenStatus: run.slot.kitchenStatus || "pending",
+                    // Reservation-attached food preorders predate the QR
+                    // self-order feature entirely and are always placed by
+                    // staff — normalised here purely so every element of
+                    // GET /kitchen/orders' `indoor` array shares one shape
+                    // (see the walk-in branch below for the QR case).
+                    source: "staff"
                 });
                 run = null;
             };
@@ -2441,6 +2450,20 @@ function setupMiddleware() {
             try { await fs.access(file); return res.sendFile(file); } catch {}
         }
         res.status(404).send("delivery.html not found");
+    };
+
+    // The guest QR self-order page. Serves the shell unconditionally —
+    // token validation happens in GET /api/table-session/:token, not here,
+    // so the HTML stays cacheable and every rejection lives in one place.
+    const tableHtmlRoute = async (req, res) => {
+        const candidates = [
+            path.join(frontendPath, "table.html"),
+            path.join(frontendPath, "html", "table.html")
+        ];
+        for (const file of candidates) {
+            try { await fs.access(file); return res.sendFile(file); } catch {}
+        }
+        res.status(404).send("table.html not found");
     };
 
     const driverHtmlRoute = async (req, res) => {
@@ -2675,6 +2698,7 @@ function setupMiddleware() {
         app.get(`${base}/inner.html`, innerHtmlRoute);
         app.get(`${base}/admin`, innerHtmlRoute);
         app.get(`${base}/delivery`, deliveryHtmlRoute);
+        app.get(`${base}/stul/:token`, tableHtmlRoute);
         app.get(`${base}/driver`, driverHtmlRoute);
         app.get(`${base}/kitchen`, kitchenHtmlRoute);
         for (const [route, handler] of Object.entries(legalPageRoutesByPath)) {
@@ -2691,6 +2715,7 @@ function setupMiddleware() {
         app.get("/inner.html", innerHtmlRoute);
         app.get("/admin", innerHtmlRoute);
         app.get("/delivery", deliveryHtmlRoute);
+        app.get("/stul/:token", tableHtmlRoute);
         app.get("/driver", driverHtmlRoute);
         app.get("/kitchen", kitchenHtmlRoute);
         for (const [route, handler] of Object.entries(legalPageRoutesByPath)) {
@@ -3748,7 +3773,17 @@ function setupAPIRoutes() {
                     order: (o.items || []).map(i => ({ item: i.item, qty: i.qty, price: i.price })),
                     orderTotal: o.total,
                     kitchenStatus: o.kitchenStatus || "pending",
-                    createdAt: o.createdAt
+                    createdAt: o.createdAt,
+                    // Guest note from the QR self-order flow (e.g. "bez
+                    // cibule") — without passing it through here it never
+                    // reaches the kitchen board at all. Walk-in orders taken
+                    // by staff before this field existed simply have "".
+                    note: o.note || "",
+                    // Absent on every row written before the QR self-order
+                    // feature — normalised to "staff" here so the kitchen
+                    // board's badge logic has one shape to reason about
+                    // rather than a tri-state.
+                    source: o.source || "staff"
                 });
             }
 
@@ -3970,6 +4005,12 @@ function setupAPIRoutes() {
             // at sync — but without it there is no way to trace a disputed
             // sale back to the tablet that took it.
             clientSaleId: typeof (req.body || {}).clientSaleId === "string" ? req.body.clientSaleId.slice(0, 64) : null,
+            // Which side placed this. "staff" = a waiter using *Objednat ke
+            // stolu*; "qr" = the guest's own phone via POST /table-orders
+            // (spec 2026-08-04 §4.2). Rows written before that feature
+            // existed carry NO `source` at all and are read as "staff" —
+            // they are deliberately not migrated.
+            source: "staff",
             // Walk-in/table orders are usually settled physically at the
             // table (cash or a card terminal) — paymentMethod stays null for
             // that case, same as before. Optionally payable online too, via
@@ -4088,6 +4129,192 @@ function setupAPIRoutes() {
         if (!ok) return res.status(404).json({ error: "Objednávka nenalezena" });
         broadcastBoardEvent();
         res.json({ success: true });
+    });
+
+    // ── TABLE QR SELF-ORDER (customer-placed) ────────────────────────────
+    //
+    // Spec: docs/superpowers/specs/2026-08-04-table-qr-self-order-design.md
+    //
+    // These routes are PUBLIC and session-less by design — the caller is a
+    // guest's phone that scanned a QR code, and it has no account. That is
+    // the same posture as POST /orders (delivery checkout) above, and the
+    // same reason csrf.requireCsrf is absent: CSRF protection defends routes
+    // that act on the strength of an auth COOKIE. There is no cookie here,
+    // so there is nothing for an attacker to ride. What guards these routes
+    // instead is the signed token + the rate limiters + the settings gate.
+
+    // Resolves :token (params) or body.token to a live table record and
+    // hangs the result on the request. Runs BEFORE tableOrderTableLimiter,
+    // which keys on req.tableFileId — see that limiter's mounting contract
+    // in security.js.
+    function resolveTableToken(source) {
+        return (req, res, next) => {
+            const raw = source === "body" ? (req.body || {}).token : req.params.token;
+            const fileId = tableToken.verifyTableToken(raw);
+            // 404, not 403: a bad signature must be indistinguishable from
+            // a URL that was never valid. Telling an attacker "the signature
+            // was wrong" confirms the id half was right.
+            if (!fileId) return res.status(404).json({ error: "Neplatný kód stolu" });
+
+            const table = db.list(COL.timetables).find(t => t.fileId === fileId);
+            // 410 Gone, not 404: the token IS valid, the table was deleted.
+            // A printed card outliving its table is a real operational case
+            // and the guest page says something useful about it.
+            if (!table) return res.status(410).json({ error: "Tento stůl už neexistuje" });
+
+            req.tableFileId = fileId;
+            req.tableRecord = table;
+            next();
+        };
+    }
+
+    // GET — turns a scan into a usable page: the table's CURRENT name (the
+    // token is bound to fileId, so a renamed table keeps its printed code
+    // working) plus whether ordering is open right now.
+    app.get(
+        `${api}/table-session/:token`,
+        security.tableOrderIpLimiter,
+        V.validateParams(V.paramsTableToken),
+        resolveTableToken("params"),
+        (req, res) => {
+            const settings = settingsStore.getSettings();
+            const open = settingsStore.isTableOrderingOpenNow(settings);
+            res.json({
+                tableName: req.tableRecord.className,
+                ordering: {
+                    enabled: !!(settings.tableOrdering && settings.tableOrdering.enabled),
+                    open: open.ok,
+                    notice: open.reason,
+                },
+            });
+        }
+    );
+
+    // POST — the guest places an order. Writes an ORDINARY indoor order, so
+    // the kitchen board, admin overview, sales stats, receipts and EET all
+    // pick it up with no code of their own. The only difference from a
+    // waiter-placed row is source:"qr".
+    app.post(
+        `${api}/table-orders`,
+        security.tableOrderIpLimiter,
+        V.validate(V.tableOrderSchema),
+        resolveTableToken("body"),
+        security.tableOrderTableLimiter,
+        (req, res) => {
+            const { guestName, note, items } = req.body || {};
+
+            // The server is the authority on whether we are open — the page
+            // shows its own banner, but a stale tab or a crafted request
+            // must not get past this.
+            const settings = settingsStore.getSettings();
+            const open = settingsStore.isTableOrderingOpenNow(settings);
+            if (!open.ok) return res.status(403).json({ error: open.reason });
+
+            // Same single pricing funnel every other order route uses. The
+            // offlineSale branch of POST /indoor-orders is deliberately NOT
+            // reachable from here: a guest phone is never an offline POS, so
+            // a client-supplied price is never accepted, and priced.error
+            // always 400s (that is the sold-out guard).
+            const priced = priceOrderItems(items);
+            if (priced.error) return res.status(400).json({ error: priced.error });
+
+            const id = generateFileId();
+            const order = {
+                id,
+                tableName: req.tableRecord.className,
+                guestName: (guestName || "").trim(),
+                note: (note || "").trim(),
+                items: priced.items,
+                total: priced.total,
+                kitchenStatus: "pending",
+                createdAt: new Date().toISOString(),
+                pricedOffline: false,
+                offlineServerTotal: null,
+                offlinePricingReason: null,
+                clientSaleId: null,
+                paymentStatus: "unpaid",
+                gatewayTransactionId: null,
+                receiptId: null,
+                // See POST /indoor-orders' matching field.
+                source: "qr",
+            };
+
+            db.set(COL.indoorOrders, id, order);
+            broadcastBoardEvent();
+
+            res.json({
+                success: true,
+                orderId: id,
+                tableName: order.tableName,
+                total: order.total,
+                items: order.items,
+            });
+        }
+    );
+
+    // GET — live status for ONE order the guest just placed.
+    //
+    // Scoped hard: the caller must present the table token, and the order's
+    // tableName must match that token's table. A token for stůl 5 can never
+    // read stůl 6's order, and there is deliberately no listing route. The
+    // response carries no item list and no guest name — only what the
+    // "your order is being cooked" screen needs.
+    //
+    // Polled, not SSE: GET /api/events/board sits behind requireAuth and
+    // must stay there.
+    app.get(
+        `${api}/table-orders/:id/status`,
+        security.tableOrderIpLimiter,
+        V.validateParams(V.paramsId),
+        (req, res) => {
+            const fileId = tableToken.verifyTableToken(req.query.token);
+            if (!fileId) return res.status(404).json({ error: "Neplatný kód stolu" });
+
+            const table = db.list(COL.timetables).find(t => t.fileId === fileId);
+            if (!table) return res.status(410).json({ error: "Tento stůl už neexistuje" });
+
+            const order = db.get(COL.indoorOrders, req.params.id);
+            // Same 404 for "no such order" and "someone else's order" — the
+            // distinction is exactly what an enumerator would want.
+            if (!order || order.tableName !== table.className) {
+                return res.status(404).json({ error: "Objednávka nenalezena" });
+            }
+
+            res.json({
+                kitchenStatus: order.kitchenStatus,
+                paymentStatus: order.paymentStatus,
+                total: order.total,
+                createdAt: order.createdAt,
+            });
+        }
+    );
+
+    // GET — every table's QR token + printable URL, for the admin panel.
+    //
+    // A SEPARATE, AUTHENTICATED route on purpose. GET /timetables (line
+    // ~2809) is PUBLIC — renderer.js depends on that — so attaching tokens
+    // to its payload would publish every table's ordering capability to the
+    // internet and defeat the signature entirely.
+    app.get(`${api}/table-qr-tokens`, requireAuth, (req, res) => {
+        try {
+            const origin = `${req.protocol}://${req.get("host")}`;
+            const rows = db.list(COL.timetables)
+                .filter(t => t && t.fileId && t.className)
+                .map(t => {
+                    const token = tableToken.mintTableToken(t.fileId);
+                    return {
+                        fileId: t.fileId,
+                        className: t.className,
+                        token,
+                        url: `${origin}${SERVER_CONFIG.basePath}/stul/${token}`,
+                    };
+                });
+            rows.sort((a, b) => a.className.localeCompare(b.className, "cs"));
+            res.json(rows);
+        } catch (e) {
+            console.error("Failed to mint table QR tokens:", e);
+            res.status(500).json({ error: "Nepodařilo se vygenerovat QR kódy" });
+        }
     });
 
     // ── DRIVERS ──────────────────────────────────────────────────────────

@@ -94,6 +94,27 @@ function buildDefaultSettings() {
             pscWhitelist: ["12000", "12800"],
             etaMinutes: 60,
         },
+        // Customer QR self-order at tables (spec: docs/superpowers/specs/
+        // 2026-08-04-table-qr-self-order-design.md §7). Same day/hours shape
+        // as `delivery` above, deliberately — the admin UI reuses the very
+        // same hours table renderer.
+        //
+        // `enabled` defaults to FALSE, unlike delivery. Printing and placing
+        // the QR codes IS the deployment step for this feature; an install
+        // that has never printed one must not be silently accepting
+        // anonymous orders from anyone who guesses the URL shape.
+        tableOrdering: {
+            enabled: false,
+            days: {
+                "0": { open: true, from: "11:00", to: "21:00" },
+                "1": { open: true, from: "11:00", to: "21:00" },
+                "2": { open: true, from: "11:00", to: "21:00" },
+                "3": { open: true, from: "11:00", to: "21:00" },
+                "4": { open: true, from: "11:00", to: "21:00" },
+                "5": { open: true, from: "11:00", to: "21:00" },
+                "6": { open: true, from: "11:00", to: "21:00" },
+            },
+        },
         closedDays: [], // [{ date: "YYYY-MM-DD", note: "Vánoce" }, ...]
         dailyMenu: { enabled: true, from: "11:00", to: "14:00" },
         notifications: {
@@ -310,6 +331,39 @@ function isDeliveryOpenNow(settings, now = new Date()) {
     return { ok: true, reason: null, today: day };
 }
 
+// Table QR self-ordering gate. Same contract as isDeliveryOpenNow above —
+// { ok, reason, today } — so the guest page can render today's hours without
+// a second lookup. POST /table-orders re-checks this for real; the page's
+// own banner is only the front-of-house reflection of it.
+//
+// Note the inverted flag: delivery has `paused` (opt-out), this has
+// `enabled` (opt-in). See the DEFAULT_SETTINGS comment for why.
+function isTableOrderingOpenNow(settings, now = new Date()) {
+    const cfg = settings.tableOrdering || {};
+
+    if (!cfg.enabled) {
+        return { ok: false, reason: "Objednávky u stolu nejsou momentálně dostupné.", today: null };
+    }
+
+    const dateStr = formatDateStrLocal(now);
+    if (findClosedDay(settings, dateStr)) {
+        return { ok: false, reason: "Dnes máme zavřeno.", today: null };
+    }
+
+    const dayKey = String(dayIndexMonFirst(now));
+    const day = cfg.days && cfg.days[dayKey];
+    if (!day || !day.open) {
+        return { ok: false, reason: "Objednávky u stolu jsou momentálně uzavřeny.", today: day || null };
+    }
+
+    const hhmm = formatHHMM(now);
+    if (hhmm < day.from || hhmm > day.to) {
+        return { ok: false, reason: `Objednávky u stolu přijímáme ${day.from}–${day.to}.`, today: day };
+    }
+
+    return { ok: true, reason: null, today: day };
+}
+
 // itemsTotalCzk: cart subtotal (Kč, before delivery fee); psc: customer's
 // postal code (string, digits only expected but not enforced here — the
 // caller/zod schema is the shape gate). Returns { ok, fee, reason }.
@@ -375,6 +429,7 @@ module.exports = {
     saveSettings,
     isReservationSlotOpen,
     isDeliveryOpenNow,
+    isTableOrderingOpenNow,
     quoteDelivery,
     isDailyMenuWindowOpen,
     // exported for tests / reuse, not part of the "public API" surface used
