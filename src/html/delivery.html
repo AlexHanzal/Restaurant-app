@@ -230,6 +230,10 @@
      CSP's script-src drop 'unsafe-inline' entirely — see configureHelmet()
      in src/server/server.js. -->
 <script src="/reservation/config.js"></script>
+<!-- Shared menu data layer (src/js/menu-catalog.js) — also used by the QR
+     table-order page (src/js/table-order.js). Must load before delivery.js,
+     which reads window.MenuCatalog at parse time. -->
+<script src="/reservation/js/menu-catalog.js"></script>
 <script src="/reservation/js/delivery.js"></script>
 </body>
 </html>

@@ -9,12 +9,14 @@
 const API_BASE_URL = window.API_BASE_URL || `http://${window.location.hostname}:3000`;
 const API_URL = `${API_BASE_URL}/reservation/api`;
 
-const MENU_CATEGORIES = [
-    { id: 'main',     label: 'Hlavní jídla' },
-    { id: 'side',     label: 'Přílohy' },
-    { id: 'drinks',   label: 'Nápoje' },
-    { id: 'desserts', label: 'Dezerty' },
-];
+// Menu data layer, shared with the QR table-order page — see
+// src/js/menu-catalog.js. Loaded by a <script> tag ahead of this file.
+const MC = window.MenuCatalog;
+const MENU_CATEGORIES = MC.MENU_CATEGORIES;
+const DAILY_ITEM_ID_PREFIX = MC.DAILY_ITEM_ID_PREFIX;
+const DAILY_CATEGORY_ID = MC.DAILY_CATEGORY_ID;
+const COMBO_ITEM_ID_PREFIX = MC.COMBO_ITEM_ID_PREFIX;
+const COMBO_CATEGORY_ID = MC.COMBO_CATEGORY_ID;
 
 let currentMenu = {};
 let activeCategory = null; // category id currently highlighted by scroll-spy
@@ -22,52 +24,35 @@ let cart = {}; // dishId -> { id, name, price, categoryId, qty }
 let dishIndex = {}; // dishId -> { dish, categoryId } — for in-place row updates
 let sectionObserver = null;
 
-// go-live Task 3 (spec §5): today's specials ("Polední menu"), fetched from
-// the PUBLIC GET /daily-menu (no ?date=) — only ever returns items while
-// settings.dailyMenu.enabled and the current time is within from/to (empty
-// list otherwise, e.g. outside the window or nothing entered today). Each
-// item's cart/dish id is namespaced "daily:<id>" (see DAILY_ITEM_ID_PREFIX
-// in server.js) so priceOrderItems() there can tell a daily-menu line apart
-// from a regular menu dish id/name and price it from the dailyMenu record
-// instead — the server never trusts this client-side price for these items
-// either, same as regular dishes.
-const DAILY_ITEM_ID_PREFIX = 'daily:';
-const DAILY_CATEGORY_ID = 'daily-menu';
+// go-live Task 3 (spec §5): today's specials ("Polední menu"), fetched via
+// MC.fetchDailyMenu() from the PUBLIC GET /daily-menu (no ?date=) — only
+// ever returns items while settings.dailyMenu.enabled and the current time
+// is within from/to (empty list otherwise, e.g. outside the window or
+// nothing entered today). Each item's cart/dish id is namespaced
+// "daily:<id>" (DAILY_ITEM_ID_PREFIX, see src/js/menu-catalog.js) so
+// priceOrderItems() in server.js can tell a daily-menu line apart from a
+// regular menu dish id/name and price it from the dailyMenu record instead
+// — the server never trusts this client-side price for these items either,
+// same as regular dishes.
 let dailyMenuItems = []; // [{id, name, price, vatRate}] as returned by the server
 
 // ── COMBO MENUS ("Zvýhodněná menu") ─────────────────────────────────────
-// Spec: docs/superpowers/specs/2026-07-22-combo-menus-design.md. Fetched
-// from the PUBLIC GET /combos alongside the regular menu. Each combo bundles
-// a few regular-menu dishes (by id, "slots") for one price, and the
-// customer may customize it before adding it to the cart: remove a slot
-// (subtracts that slot's admin-set removeValue), swap a slot's dish for one
-// of the admin-allowed alternatives (price difference applies both ways),
-// tick paid extras, and attach a short note. A customized combo becomes ONE
-// cart line, namespaced "combo:<comboId>" (mirrors the "daily:" pattern
-// above) — see COMBO_ITEM_ID_PREFIX further down for how the cart/checkout
-// side tells these apart from regular dish lines. The server is always the
-// price/name authority (see priceOrderItems()'s combo: branch, server.js);
-// everything computed here is display-only, but must match that formula so
-// the customer isn't surprised at checkout.
+// Spec: docs/superpowers/specs/2026-07-22-combo-menus-design.md. Fetched via
+// MC.fetchCombos() from the PUBLIC GET /combos alongside the regular menu.
+// Each combo bundles a few regular-menu dishes (by id, "slots") for one
+// price, and the customer may customize it before adding it to the cart:
+// remove a slot (subtracts that slot's admin-set removeValue), swap a
+// slot's dish for one of the admin-allowed alternatives (price difference
+// applies both ways), tick paid extras, and attach a short note. A
+// customized combo becomes ONE cart line, namespaced "combo:<comboId>"
+// (COMBO_ITEM_ID_PREFIX, mirrors the "daily:" pattern above, both defined
+// in src/js/menu-catalog.js) — see COMBO_LINE_KEY_PREFIX further down for
+// how this page's own cart tells several distinctly-customized lines of the
+// same combo apart. The server is always the price/name authority (see
+// priceOrderItems()'s combo: branch, server.js); MC.comboPricePreview()
+// mirrors that formula for display, but must match it exactly so the
+// customer isn't surprised at checkout.
 let combos = []; // raw array as returned by GET /combos, unfiltered
-const COMBO_CATEGORY_ID = 'combo-menu'; // pseudo-category, mirrors DAILY_CATEGORY_ID
-
-async function fetchCombos() {
-    try {
-        const res = await fetch(`${API_URL}/combos`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        combos = Array.isArray(data) ? data : [];
-    } catch (e) {
-        // Fails open to "no combos" — the section simply doesn't render
-        // (see isComboRenderable()/renderMenuSections()). Combos are a
-        // bonus on top of the regular menu, so a failure here must never
-        // block the rest of the page (no toast, unlike fetchMenu()).
-        console.error('Failed to load combos:', e);
-        combos = [];
-    }
-    return combos;
-}
 
 // ── RESTAURANT SETTINGS (delivery hours / pause) ────────────────────────
 // Fetched once on load from the public GET /settings (src/server/settings.js
@@ -269,44 +254,10 @@ function closeSheet(backdropId, sheetId) {
 }
 
 // ── DATA LOADING ─────────────────────────────────────────────────────────
-
-async function fetchMenu() {
-    try {
-        const res = await fetch(`${API_URL}/menu`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        currentMenu = await res.json();
-    } catch (e) {
-        console.error('Failed to load menu:', e);
-        currentMenu = {};
-        showToast('Nepodařilo se načíst menu', true);
-    }
-    return currentMenu;
-}
-
-// go-live Task 3 (spec §5): public, no ?date= — server only ever returns
-// today's items, and only inside the configured window. Fails open to an
-// empty list (never blocks the rest of the page from loading) on any error.
-async function fetchDailyMenu() {
-    try {
-        const res = await fetch(`${API_URL}/daily-menu`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        dailyMenuItems = Array.isArray(data.items) ? data.items : [];
-    } catch (e) {
-        console.error('Failed to load daily menu:', e);
-        dailyMenuItems = [];
-    }
-    return dailyMenuItems;
-}
-
-// Category-label lookup that also understands the daily-menu pseudo-category
-// (which isn't in MENU_CATEGORIES — it's rendered separately, see
-// renderMenuSections) — used by the cart drawer to show a category label.
-function categoryLabel(categoryId) {
-    if (categoryId === DAILY_CATEGORY_ID) return 'Polední menu';
-    if (categoryId === COMBO_CATEGORY_ID) return 'Zvýhodněná menu';
-    return (MENU_CATEGORIES.find(c => c.id === categoryId) || {}).label || '';
-}
+// fetchMenu/fetchDailyMenu/categoryLabel moved to src/js/menu-catalog.js
+// (shared with the QR table-order page) — see the `MC` alias set up above.
+// Call sites below use MC.fetchMenu(API_URL) etc. and assign the result to
+// this page's own currentMenu/dailyMenuItems variables.
 
 // ── CATEGORY NAV (sticky chips, scroll-spy highlight) ───────────────────
 
@@ -316,7 +267,7 @@ function renderCatTabs() {
 
     const cats = MENU_CATEGORIES.filter(cat => (currentMenu[cat.id] || []).length > 0);
     const hasDaily = dailyMenuItems.length > 0;
-    const hasCombos = combos.filter(isComboRenderable).length > 0;
+    const hasCombos = combos.filter(c => MC.isComboRenderable(c, currentMenu)).length > 0;
     container.hidden = cats.length === 0 && !hasDaily && !hasCombos;
     if (cats.length === 0 && !hasDaily && !hasCombos) return;
 
@@ -406,7 +357,7 @@ function renderMenuSections() {
 
     // ── Zvýhodněná menu (combos — rendered first, above even the daily
     // menu; spec: "ABOVE the regular category sections") ────────────────
-    const renderableCombos = combos.filter(isComboRenderable);
+    const renderableCombos = combos.filter(c => MC.isComboRenderable(c, currentMenu));
     if (renderableCombos.length > 0) {
         container.appendChild(buildCombosSection(renderableCombos));
     }
@@ -563,7 +514,10 @@ function makePlaceholder() {
 // Dish lookup restricted to the regular menu categories (MENU_CATEGORIES) —
 // combo slots/swaps only ever reference regular menu dishes, never
 // daily-menu items. Mirrors flattenMenuDishes()/findMenuDish() in
-// server.js, just client-side and by exact id.
+// server.js, just client-side and by exact id. This page's own copy — it
+// closes over the page's own currentMenu variable, unlike menu-catalog.js's
+// private helper of the same name (which takes `menu` as a parameter since
+// that module holds no state of its own).
 function findDishInMenu(dishId) {
     for (const cat of MENU_CATEGORIES) {
         const found = (currentMenu[cat.id] || []).find(d => d.id === dishId);
@@ -572,16 +526,9 @@ function findDishInMenu(dishId) {
     return null;
 }
 
-// "A combo whose slot references a dish missing from the fetched menu is
-// skipped (not rendered)" (plan, Task 3). Only the *default* dish of every
-// slot is checked here — a default dish that still exists but is itself
-// soldOut is left to render as-is; the server rejects the order at
-// checkout time if the customer doesn't remove/swap that slot away (same
-// "server is the source of truth" spirit as everywhere else on this page).
-function isComboRenderable(combo) {
-    if (!combo || !Array.isArray(combo.items) || combo.items.length === 0) return false;
-    return combo.items.every(it => it && !!findDishInMenu(it.dishId));
-}
+// isComboRenderable() moved to src/js/menu-catalog.js as
+// MC.isComboRenderable(combo, menu) — call sites below pass currentMenu
+// explicitly since MC holds no menu state of its own.
 
 // "dish1 + dish2 + dish3" — default dish names, in slot order.
 function comboContentsSummary(combo) {
@@ -666,33 +613,13 @@ function formatSignedDelta(delta) {
     return n > 0 ? `+${n} Kč` : `−${Math.abs(n)} Kč`;
 }
 
-// Same formula as the server's combo: branch in priceOrderItems() (spec
-// "Cart line & server-side pricing"): base price − removed slots'
-// removeValue + (swap dish price − default dish price) for swapped slots +
-// checked extras, clamped at 0. Display-only — the server always
-// recomputes for real.
-function computeComboUnitPrice(combo, slotSelections, extrasSelected) {
-    let price = Number(combo.price) || 0;
-
-    (combo.items || []).forEach(it => {
-        const sel = slotSelections[it.slotId] || 'default';
-        if (sel === 'removed') {
-            price -= Number(it.removeValue) || 0;
-        } else if (sel.startsWith('swap:')) {
-            const swapDish = findDishInMenu(sel.slice(5));
-            const defaultDish = findDishInMenu(it.dishId);
-            if (swapDish && defaultDish) {
-                price += (Number(swapDish.price) || 0) - (Number(defaultDish.price) || 0);
-            }
-        }
-    });
-
-    (combo.extras || []).forEach(ex => {
-        if (extrasSelected.has(ex.id)) price += Number(ex.price) || 0;
-    });
-
-    return Math.max(0, price);
-}
+// computeComboUnitPrice() moved to src/js/menu-catalog.js as
+// MC.comboPricePreview(combo, { slotSelections, extrasSelected }, menu) ->
+// { total, lines }. Same formula as the server's combo: branch in
+// priceOrderItems() — call sites below destructure .total; the breakdown
+// text shown to the customer here still comes from buildComboDisplayName()
+// below, which needs the raw selections (not just price deltas) to word it
+// exactly like the server-stored order-line name.
 
 // Rebuilds the exact human-readable breakdown the server stores as the
 // order line's name (spec example: "Menu 1 (bez polévky, Fanta místo
@@ -851,24 +778,24 @@ function renderComboDialogContent() {
 function updateComboDialogTotal() {
     if (!comboDialogState) return;
     const { combo, slotSelections, extrasSelected } = comboDialogState;
-    const price = computeComboUnitPrice(combo, slotSelections, extrasSelected);
-    document.getElementById('comboDialogTotal').textContent = formatPrice(price);
+    const { total } = MC.comboPricePreview(combo, { slotSelections, extrasSelected }, currentMenu);
+    document.getElementById('comboDialogTotal').textContent = formatPrice(total);
 }
 
 // ── Combo cart lines ─────────────────────────────────────────────────────
-// COMBO_ITEM_ID_PREFIX mirrors DAILY_ITEM_ID_PREFIX above and the server's
-// COMBO_ITEM_ID_PREFIX constant (spec). Unlike regular dish lines, several
-// cart lines can legitimately share the same server-facing id
-// ("combo:<comboId>") — one per distinct customization, never merged (spec:
-// "Each customized combo is its own line... identical configs are NOT
-// merged"). The `cart` object used everywhere else on this page is keyed by
-// dish.id for regular lines, which doubles as that line's identity; combo
-// lines instead get a synthetic, always-unique local key
-// (COMBO_LINE_KEY_PREFIX + running counter) so the *object key* stays
-// unique per line while the *stored id* stays the shared "combo:<comboId>"
-// the server needs. Nothing else in this file reads the outer cart object's
-// own keys (only item.id inside each value), so this is safe.
-const COMBO_ITEM_ID_PREFIX = 'combo:';
+// COMBO_ITEM_ID_PREFIX (aliased from MC at the top of this file) mirrors
+// DAILY_ITEM_ID_PREFIX and the server's own constant of the same name
+// (spec). Unlike regular dish lines, several cart lines can legitimately
+// share the same server-facing id ("combo:<comboId>") — one per distinct
+// customization, never merged (spec: "Each customized combo is its own
+// line... identical configs are NOT merged"). The `cart` object used
+// everywhere else on this page is keyed by dish.id for regular lines, which
+// doubles as that line's identity; combo lines instead get a synthetic,
+// always-unique local key (COMBO_LINE_KEY_PREFIX + running counter) so the
+// *object key* stays unique per line while the *stored id* stays the shared
+// "combo:<comboId>" the server needs. Nothing else in this file reads the
+// outer cart object's own keys (only item.id inside each value), so this is
+// safe.
 const COMBO_LINE_KEY_PREFIX = 'combo-line:';
 let comboLineSeq = 0;
 
@@ -990,7 +917,7 @@ function renderCartDrawer() {
         itemsEl.innerHTML = `<p class="ds-empty">Košík je zatím prázdný.<br>Přidejte si něco z menu.</p>`;
     } else {
         entries.forEach(([localKey, item]) => {
-            const catLabel = categoryLabel(item.categoryId);
+            const catLabel = MC.categoryLabel(item.categoryId);
             const isCombo = typeof item.id === 'string' && item.id.startsWith(COMBO_ITEM_ID_PREFIX);
 
             const row = document.createElement('div');
@@ -1418,7 +1345,7 @@ document.getElementById('comboSheetConfirmBtn').addEventListener('click', () => 
     if (extras.length > 0) comboConfig.extras = extras;
     if (note) comboConfig.note = note;
 
-    const price = computeComboUnitPrice(combo, slotSelections, extrasSelected);
+    const { total: price } = MC.comboPricePreview(combo, { slotSelections, extrasSelected }, currentMenu);
     const name = buildComboDisplayName(combo, removed, swaps, extras, note);
 
     addComboLineToCart(combo, comboConfig, price, name);
@@ -1853,17 +1780,17 @@ document.getElementById('reorderSheetBackdrop').addEventListener('click', () => 
 // ── INIT ─────────────────────────────────────────────────────────────────
 
 (async function init() {
-    await fetchMenu();
+    currentMenu = await MC.fetchMenu(API_URL);
     // Combo menus reference regular menu dishes by id (see
-    // isComboRenderable()/findDishInMenu()), so this is fetched only after
-    // fetchMenu() above has populated currentMenu. A failure here degrades
-    // gracefully to "no combos section" (see fetchCombos()) — never blocks
-    // the rest of the page.
-    await fetchCombos();
+    // MC.isComboRenderable()/findDishInMenu()), so this is fetched only
+    // after MC.fetchMenu() above has populated currentMenu. A failure here
+    // degrades gracefully to "no combos section" (see MC.fetchCombos()) —
+    // never blocks the rest of the page.
+    combos = await MC.fetchCombos(API_URL);
     // go-live Task 3 (spec §5): daily specials, fetched alongside the
     // regular menu so the very first render already shows/hides the
     // "Polední menu" section correctly (no flash of it appearing later).
-    await fetchDailyMenu();
+    dailyMenuItems = await MC.fetchDailyMenu(API_URL);
     // Settings (fee/minOrder/freeAbove/etaMinutes/hours) fetched before the
     // first cart render so the sticky bar/checkout summary show the right
     // fee from the very first paint instead of a flash of "0 Kč fee".
