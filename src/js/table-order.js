@@ -1073,8 +1073,14 @@
             }
             const data = await res.json();
             document.getElementById('statusTotal').textContent = `Celkem: ${formatPrice(data.total)}`;
-            renderStatus(data.kitchenStatus);
+            // Set BEFORE renderStatus, not after: renderStatus reads this
+            // flag to decide between "Přijato" and "Připravuje se". Setting
+            // it afterwards made the first response render with the flag
+            // still false, so the upgrade the comment above describes as
+            // happening on the first poll actually took two — the guest sat
+            // on "Přijato" for a whole extra poll interval.
             hasPolledOnceThisSession = true;
+            renderStatus(data.kitchenStatus);
 
             if (data.kitchenStatus === 'completed') {
                 stopStatusPolling();
