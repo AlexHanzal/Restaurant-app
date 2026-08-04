@@ -168,6 +168,16 @@ html, body {
     font-style: italic;
 }
 
+/* Table QR self-order badge (plan Task 6, spec §8.4) — sits inline next to
+   kit-ticket__source on indoor tickets placed by a guest scanning the
+   table's QR code. Reuses the shared .ds-badge box (design.css) the same
+   way .ds-badge--paid/--unpaid do on delivery tickets; only the color
+   varies per variant, so no need to duplicate the box styling here. */
+.ds-badge--qr {
+    color: var(--ds-accent);
+    vertical-align: middle;
+}
+
 .kit-ticket__badges {
     display: flex;
     flex-wrap: wrap;

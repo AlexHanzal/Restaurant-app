@@ -246,10 +246,18 @@ function renderIndoorCard(order) {
         ? `Objednáno u stolu · ${formatTime(order.createdAt)}`
         : `${escapeHtml(order.dateStr)} · ${timeRangeLabel(order.startHour, order.endHour) || '?'}`;
 
+    // Table QR self-order (plan Task 6, spec §8.4). `source` is normalised
+    // server-side to "staff"|"qr" on every row of this board's `indoor`
+    // array — but rows that predate this feature still round-trip through
+    // here with no `source` at all, so the guard is an explicit '==='
+    // rather than a truthy check: `undefined === 'qr'` is false, which is
+    // exactly "render like today" for legacy orders and waiter-placed ones.
+    const qrBadge = order.source === 'qr' ? `<span class="ds-badge ds-badge--qr">QR</span>` : '';
+
     card.innerHTML = `
         <div class="kit-ticket__top">
             <div>
-                <div class="kit-ticket__source">${escapeHtml(order.tableName)}${order.guestName ? ' — ' + escapeHtml(order.guestName) : ''}</div>
+                <div class="kit-ticket__source">${escapeHtml(order.tableName)}${order.guestName ? ' — ' + escapeHtml(order.guestName) : ''} ${qrBadge}</div>
                 <div class="kit-ticket__sub">${subLabel}</div>
             </div>
             ${timerBadgeHtml(order.createdAt)}
@@ -261,6 +269,7 @@ function renderIndoorCard(order) {
             <span>Celkem</span>
             <span>${formatPrice(order.orderTotal)}</span>
         </div>
+        ${order.note ? `<div class="kit-ticket__note">Poznámka: ${escapeHtml(order.note)}</div>` : ''}
         <div class="kit-ticket__footer">
             <button class="ds-btn ds-btn--ghost kit-ticket__remove" type="button" title="Odstranit objednávku" aria-label="Odstranit objednávku">🗑️</button>
             <button class="ds-btn ${isDone ? 'ds-btn--success' : 'ds-btn--primary'} ds-btn--block kit-ticket__action" type="button" ${isDone ? 'disabled' : ''}>${isDone ? 'HOTOVO ✓' : 'Začít připravovat'}</button>

@@ -811,6 +811,11 @@ async function loadAllTables() {
             } catch (e) { console.error('Failed to load', name, e); }
         }
         tables = loaded;
+        // A table create/rename/delete may have happened since the last
+        // fetch (this reload is how all three of those surface) — the
+        // cached QR tokens key off className, so a stale cache here would
+        // show the wrong table name/URL on the next QR panel or print sheet.
+        tableQrTokensCache = null;
         await fetchIndoorWalkinOrders();
         renderSidebar();
         if (currentView === 'overview') renderOverview();
@@ -1296,9 +1301,14 @@ function renderWalkinOrderRow(order) {
     row.className = 'inn-oc-booking-row inn-oc-booking-today';
 
     const itemsLine = (order.items || []).map(i => `${i.qty}× ${i.item}`).join(', ');
+    // Table QR self-order (plan Task 6, spec §8.3) — guard explicitly on the
+    // string, not truthiness: rows predating this feature have no `source`
+    // field at all, and `undefined === 'qr'` is false, so they keep
+    // rendering exactly as before with no badge.
+    const qrBadge = order.source === 'qr' ? `<span class="inn-qr-badge" title="Objednáno hostem naskenováním QR kódu u stolu">QR</span>` : '';
     row.innerHTML = `
         <span class="inn-oc-booking-who" style="flex:1;">
-            ${order.guestName ? `${escapeHtml(order.guestName)} — ` : ''}${escapeHtml(itemsLine)}
+            ${qrBadge}${order.guestName ? `${escapeHtml(order.guestName)} — ` : ''}${escapeHtml(itemsLine)}
             <br><small style="color:var(--muted); font-family:var(--mono);">${Number(order.total || 0).toFixed(0)} Kč</small>
         </span>
         <span class="inn-status-cell">
@@ -1642,6 +1652,130 @@ function formatDateShort(dateStr) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
+// TABLE QR SELF-ORDER — admin panel + kitchen badge (plan Task 6, spec §8.3)
+// ────────────────────────────────────────────────────────────────────────
+// The signed per-table capability token is minted SERVER-SIDE ONLY — this
+// client never sees, holds, or could reconstruct the signing key, only the
+// finished token GET /table-qr-tokens (requireAuth) hands back. That route
+// is deliberately separate from the public GET /timetables list (which
+// renderer.js also depends on staying public) — see its header comment in
+// server.js for why folding QR tokens into that response would defeat the
+// whole point of a signed capability.
+// ════════════════════════════════════════════════════════════════════════
+
+// Cached across the whole admin session: a table's fileId (what the token is
+// derived from) never changes once created, so re-minting on every
+// renderDetail() call/print click would just be wasted round-trips. The
+// cache is invalidated (see loadAllTables()/deleteTable() below) wherever a
+// table could plausibly have been created, renamed or deleted since the last
+// fetch, so a stale className/URL never lingers longer than one reload.
+let tableQrTokensCache = null;
+
+async function fetchTableQrTokens() {
+    if (tableQrTokensCache) return tableQrTokensCache;
+    try {
+        const res = await apiFetch(`${API_URL}/table-qr-tokens`);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        tableQrTokensCache = await res.json();
+    } catch (e) {
+        console.error('Failed to load table QR tokens:', e);
+        tableQrTokensCache = [];
+    }
+    return tableQrTokensCache;
+}
+
+// Populates the QR panel inside a table's detail view. Split out of
+// renderDetail() itself because the token fetch is async while renderDetail()
+// is not — the panel starts in a "Načítání…" state and this function fills
+// it in once the (possibly cached) tokens resolve. Guards on
+// `selectedTableName === name` before touching the DOM: the admin may have
+// clicked to a different table, or away from the detail view entirely,
+// while this request was in flight, and painting a slow response into a
+// panel nobody's looking at would be a silent bug waiting to happen.
+async function renderTableQrPanel(panel, name) {
+    const tokens = await fetchTableQrTokens();
+    if (selectedTableName !== name || currentView !== 'detail') return;
+
+    const entry = tokens.find(t => t.className === name);
+    if (!entry) {
+        panel.innerHTML = `
+            <h3>QR kód pro objednávky u stolu</h3>
+            <p class="inn-oc-empty-note" style="margin:0;">QR kód se nepodařilo vygenerovat. Zkuste stránku obnovit.</p>
+        `;
+        return;
+    }
+
+    // Same call site/options as the payment QR at renderPayOnlineStarted()
+    // (inner.js ~1517) — 'M' error-correction and scale 5 are what that
+    // call already established as legible on a phone camera from table
+    // distance, so this reuses it rather than picking new numbers.
+    let svg = '';
+    try { svg = QR.renderSVG(entry.url, { ecLevel: 'M', scale: 5 }); }
+    catch (e) { console.error('QR render failed', e); }
+
+    panel.innerHTML = `
+        <h3>QR kód pro objednávky u stolu</h3>
+        <div class="inn-qr-panel__code">${svg}</div>
+        <p class="inn-qr-panel__url">${escapeHtml(entry.url)}</p>
+        <button type="button" class="inn-btn" id="tableQrPrintBtn">Tisknout</button>
+    `;
+    panel.querySelector('#tableQrPrintBtn').addEventListener('click', () => printTableQrSheet([entry]));
+}
+
+// Builds an in-page print sheet — one card per table entry — rather than a
+// popup window: a fresh window.open() document has neither QR.renderSVG nor
+// this app's CSS loaded, and re-injecting both into a popup is more moving
+// parts for no benefit. Instead this appends an overlay to the CURRENT
+// document and relies on the `@media print` rules in inner.css (which hide
+// every other top-level element while the overlay is present) so Ctrl+P /
+// this function's own window.print() call produces just the cards. Used by
+// both the single-table "Tisknout" button above (one entry) and the
+// Rozložení view's "Tisknout QR kódy všech stolů" button (every table).
+function printTableQrSheet(entries) {
+    if (!entries || entries.length === 0) {
+        showToast('Nejsou k dispozici žádné QR kódy k tisku', true);
+        return;
+    }
+
+    const existing = document.getElementById('tableQrPrintSheet');
+    if (existing) existing.remove();
+
+    const sheet = document.createElement('div');
+    sheet.id = 'tableQrPrintSheet';
+    sheet.className = 'inn-print-sheet';
+
+    entries.forEach(entry => {
+        let svg = '';
+        try { svg = QR.renderSVG(entry.url, { ecLevel: 'M', scale: 5 }); }
+        catch (e) { console.error('QR render failed', e); }
+
+        const card = document.createElement('div');
+        card.className = 'inn-print-card';
+        card.innerHTML = `
+            <div class="inn-print-card__name">${escapeHtml(entry.className)}</div>
+            <div class="inn-print-card__code">${svg}</div>
+            <div class="inn-print-card__caption">Naskenujte a objednejte</div>
+        `;
+        sheet.appendChild(card);
+    });
+
+    document.body.appendChild(sheet);
+
+    // 'afterprint' fires whether the admin actually printed or hit Cancel in
+    // the print dialog, so this is the one reliable place to tear the
+    // overlay back down — leaving it in the DOM would mean it silently
+    // reappears (still hidden on screen, but present) the next time
+    // anything calls window.print() for an unrelated reason.
+    function cleanup() {
+        sheet.remove();
+        window.removeEventListener('afterprint', cleanup);
+    }
+    window.addEventListener('afterprint', cleanup);
+
+    window.print();
+}
+
+// ════════════════════════════════════════════════════════════════════════
 // DETAIL VIEW (SINGLE TABLE — FULL EDIT)
 // ════════════════════════════════════════════════════════════════════════
 
@@ -1734,12 +1868,19 @@ function renderDetail(name) {
         bookingsPanel.appendChild(p);
     }
 
-    const futureNote = document.createElement('div');
-    futureNote.className = 'inn-future-note';
-    futureNote.innerHTML = `<b>Poznámka:</b> Sloupce „Objednávka“ a „Platba“ jsou připraveny pro budoucí funkci objednávek u stolu. Zatím zobrazují pouze stav „bez objednávky“ — jakmile bude funkce objednávek implementována, tyto sloupce se automaticky naplní reálnými daty.`;
-    bookingsPanel.appendChild(futureNote);
-
     container.appendChild(bookingsPanel);
+
+    // QR panel (plan Task 6, spec §8.3) — the code itself loads async (it
+    // depends on a staff-authenticated fetch), so it starts in a loading
+    // state and renderTableQrPanel() fills it in once tokens resolve.
+    const qrPanel = document.createElement('div');
+    qrPanel.className = 'inn-panel inn-qr-panel';
+    qrPanel.innerHTML = `
+        <h3>QR kód pro objednávky u stolu</h3>
+        <p class="inn-oc-empty-note" style="margin:0;">Načítání…</p>
+    `;
+    container.appendChild(qrPanel);
+    renderTableQrPanel(qrPanel, name);
 
     // Wire up tbody rows
     const tbody = table.querySelector('#bookingsTbody');
@@ -2005,6 +2146,10 @@ async function deleteTable(name) {
 
         delete tables[name];
         selectedTableName = null;
+        // See loadAllTables() — this path deletes locally without a full
+        // reload, so the QR token cache needs the same invalidation here or
+        // a subsequent print-all sheet would still include the deleted table.
+        tableQrTokensCache = null;
         showToast('Stůl smazán');
         switchView('overview');
     } catch (e) {
@@ -3781,6 +3926,59 @@ function renderDeliveryHoursTable(container, days) {
     });
 }
 
+// Table QR self-order (plan Task 6, spec §7) — straight clone of
+// renderDeliveryHoursTable() above; settings.tableOrdering.days reuses
+// deliveryDaysSchema server-side specifically so this could be a clone
+// rather than a new shape to learn. Own class names on the inputs
+// (inn-tableordering-*) so collectTableOrderingDaysFromForm() below can't
+// accidentally pick up the delivery hours table's rows or vice versa.
+function renderTableOrderingHoursTable(container, days) {
+    container.innerHTML = '';
+    SETTINGS_DELIVERY_WEEKDAYS.forEach((label, i) => {
+        const key = String(i);
+        const day = (days && days[key]) || { open: true, from: '11:00', to: '21:00' };
+
+        const row = document.createElement('div');
+        row.className = 'inn-hours-row';
+        row.dataset.dayKey = key;
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'inn-hours-row__day';
+        nameEl.textContent = label;
+        row.appendChild(nameEl);
+
+        const openLabel = document.createElement('label');
+        openLabel.className = 'inn-hours-row__open';
+        const openCheckbox = document.createElement('input');
+        openCheckbox.type = 'checkbox';
+        openCheckbox.checked = !!day.open;
+        openCheckbox.className = 'inn-tableordering-open-input';
+        openLabel.appendChild(openCheckbox);
+        openLabel.appendChild(document.createTextNode('Otevřeno'));
+        row.appendChild(openLabel);
+
+        const fromInput = document.createElement('input');
+        fromInput.type = 'time';
+        fromInput.className = 'inn-tableordering-from-input';
+        fromInput.value = day.from || '11:00';
+
+        const toInput = document.createElement('input');
+        toInput.type = 'time';
+        toInput.className = 'inn-tableordering-to-input';
+        toInput.value = day.to || '21:00';
+
+        const rangeWrap = document.createElement('span');
+        rangeWrap.className = 'inn-hours-row__range';
+        rangeWrap.appendChild(document.createTextNode('od'));
+        rangeWrap.appendChild(fromInput);
+        rangeWrap.appendChild(document.createTextNode('do'));
+        rangeWrap.appendChild(toInput);
+        row.appendChild(rangeWrap);
+
+        container.appendChild(row);
+    });
+}
+
 function renderClosedDaysList(container) {
     container.innerHTML = '';
     if (settingsWorkingClosedDays.length === 0) {
@@ -3953,6 +4151,37 @@ async function renderSettingsView() {
     deliveryPanel.innerHTML = '<h3 class="inn-settings-section-title">Rozvoz — hodiny</h3><div class="inn-hours-table" id="setDeliveryHoursTable"></div>';
     panels.appendChild(deliveryPanel);
     renderDeliveryHoursTable(deliveryPanel.querySelector('#setDeliveryHoursTable'), settings.delivery.days);
+
+    // ── Objednávky u stolu (plan Task 6, spec §7) ───────────────────────────
+    // `days` reuses deliveryDaysSchema server-side — same shape as
+    // "Rozvoz — hodiny" above by design — so renderTableOrderingHoursTable()
+    // below is a straight clone of renderDeliveryHoursTable().
+    //
+    // The `enabled` checkbox is deliberately a plain checkbox, NOT
+    // buildPauseSwitchRow's red/"danger" switch (used elsewhere in this view
+    // for Pozastavení and Notifikace): that styling means "you have turned
+    // something off/risky for real customers", which is backwards here —
+    // turning THIS on is the normal, correct end state once the QR codes are
+    // printed and placed, and painting it red the moment an admin does the
+    // right thing would read as an error. It defaults to OFF server-side
+    // (settings.js) purely because printing/placing the codes is the actual
+    // deployment step, not because being on is itself a risk.
+    const tableOrderingPanel = document.createElement('div');
+    tableOrderingPanel.className = 'inn-panel';
+    tableOrderingPanel.innerHTML = `
+        <h3 class="inn-settings-section-title">Objednávky u stolu</h3>
+        <label class="inn-tableordering-enable-row" for="setTableOrderingEnabled">
+            <input type="checkbox" id="setTableOrderingEnabled">
+            <span>
+                <strong>Povolit objednávky u stolu</strong>
+                <small>Hosté budou moci naskenovat QR kód na stole a objednat si přímo z mobilu. Zapněte až po vytištění a rozmístění QR kódů (detail stolu, nebo „Tisknout QR kódy všech stolů“ v Rozložení).</small>
+            </span>
+        </label>
+        <div class="inn-hours-table" id="setTableOrderingHoursTable"></div>
+    `;
+    panels.appendChild(tableOrderingPanel);
+    tableOrderingPanel.querySelector('#setTableOrderingEnabled').checked = !!settings.tableOrdering.enabled;
+    renderTableOrderingHoursTable(tableOrderingPanel.querySelector('#setTableOrderingHoursTable'), settings.tableOrdering.days);
 
     // ── Rozvoz — pravidla (fee/min-order/free-above/PSČ/ETA — go-live Task 2) ──
     const deliveryRulesPanel = document.createElement('div');
@@ -4170,6 +4399,20 @@ function collectDeliveryDaysFromForm() {
     return days;
 }
 
+// Table QR self-order (plan Task 6, spec §7) — mirrors collectDeliveryDaysFromForm().
+function collectTableOrderingDaysFromForm() {
+    const days = {};
+    document.querySelectorAll('#setTableOrderingHoursTable .inn-hours-row').forEach(row => {
+        const key = row.dataset.dayKey;
+        days[key] = {
+            open: row.querySelector('.inn-tableordering-open-input').checked,
+            from: row.querySelector('.inn-tableordering-from-input').value,
+            to: row.querySelector('.inn-tableordering-to-input').value,
+        };
+    });
+    return days;
+}
+
 async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, notifCheckboxes) {
     if (!settingsCache) return;
     const saveBtn = document.getElementById('setSaveBtn');
@@ -4186,6 +4429,16 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
     for (const key of Object.keys(deliveryDays)) {
         if (!(deliveryDays[key].from < deliveryDays[key].to)) {
             showToast('U rozvozu musí být čas „od“ dříve než čas „do“.', true);
+            return;
+        }
+    }
+
+    // Table QR self-order (plan Task 6, spec §7) — same shape/validation as
+    // delivery hours above (deliveryDaysSchema is reused server-side too).
+    const tableOrderingDays = collectTableOrderingDaysFromForm();
+    for (const key of Object.keys(tableOrderingDays)) {
+        if (!(tableOrderingDays[key].from < tableOrderingDays[key].to)) {
+            showToast('U objednávek u stolu musí být čas „od“ dříve než čas „do“.', true);
             return;
         }
     }
@@ -4242,6 +4495,15 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
             freeAbove: deliveryFreeAboveVal,
             etaMinutes: deliveryEtaVal,
             pscWhitelist: settingsWorkingPscWhitelist.slice(),
+        },
+        // Table QR self-order (plan Task 6, spec §7) — read straight off the
+        // DOM by id (same pattern as the Provozovna fields above) rather than
+        // threaded through as a function argument like the pause/notification
+        // checkboxes, since it isn't built via buildPauseSwitchRow.
+        tableOrdering: {
+            ...settingsCache.tableOrdering,
+            enabled: document.getElementById('setTableOrderingEnabled').checked,
+            days: tableOrderingDays,
         },
         closedDays: settingsWorkingClosedDays.map(cd => ({ date: cd.date, note: cd.note || '' })),
         // go-live Task 4 (spec §6) — Notifikace toggles.
@@ -4374,6 +4636,8 @@ async function renderLayoutView() {
         <button class="inn-btn small" id="layoutAddBlockBtn">+ Blok</button>
         <button class="inn-btn small" id="layoutAddDoorBtn">+ Dveře</button>
         <button class="inn-btn small" id="layoutAutoArrangeBtn">Auto-rozmístit</button>
+        <span class="inn-layout-toolbar-spacer"></span>
+        <button class="inn-btn small" id="layoutPrintQrBtn">🖨 Tisknout QR kódy všech stolů</button>
         <button class="inn-btn primary" id="layoutSaveBtn">Uložit rozložení</button>
     `;
     container.appendChild(toolbar);
@@ -4423,6 +4687,10 @@ async function renderLayoutView() {
     document.getElementById('layoutAddBlockBtn').addEventListener('click', () => addFixture('block'));
     document.getElementById('layoutAddDoorBtn').addEventListener('click', () => addFixture('door'));
     document.getElementById('layoutAutoArrangeBtn').addEventListener('click', autoArrangeUnplaced);
+    document.getElementById('layoutPrintQrBtn').addEventListener('click', async () => {
+        const tokens = await fetchTableQrTokens();
+        printTableQrSheet(tokens);
+    });
     document.getElementById('layoutSaveBtn').addEventListener('click', saveLayoutChanges);
 
     renderLayoutCanvas();

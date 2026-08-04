@@ -1016,6 +1016,27 @@ button.inn-status-pill.unpaid:hover { background: var(--warn); color: #fff; }
     letter-spacing: .04em;
 }
 
+/* Table QR self-order badge (plan Task 6, spec §8.3) — marks a walk-in
+   order placed by a guest scanning the table's own QR code rather than
+   taken by a waiter. Same visual language as .inn-perm-badge above, just
+   sitting *before* the row's text (order.source === 'qr' rows only —
+   legacy/waiter orders never get this badge), hence margin-right instead
+   of margin-left. */
+.inn-qr-badge {
+    display: inline-block;
+    font-size: 0.66em;
+    font-family: var(--ds-font);
+    background: #fff;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 2px 7px;
+    border-radius: 0;
+    margin-right: 6px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
 .inn-bk-delete-btn {
     border: none;
     background: none;
@@ -1027,16 +1048,69 @@ button.inn-status-pill.unpaid:hover { background: var(--warn); color: #fff; }
 }
 .inn-bk-delete-btn:hover { background: var(--danger); color: #fff; }
 
-.inn-future-note {
-    margin-top: 16px;
-    padding: 12px 14px;
-    border: 1px solid var(--rule);
-    border-radius: var(--radius);
+/* ─── QR PANEL (table detail view, plan Task 6, spec §8.3) ─────────────── */
+
+.inn-qr-panel { margin-top: 18px; }
+
+.inn-qr-panel__code {
+    display: flex;
+    justify-content: center;
+    margin: 4px 0 12px;
+}
+.inn-qr-panel__code svg { max-width: 220px; width: 100%; height: auto; }
+
+.inn-qr-panel__url {
+    text-align: center;
     font-size: 0.82em;
     color: var(--muted);
-    background: var(--paper);
+    word-break: break-all;
+    -webkit-user-select: all;
+    user-select: all;
+    margin: 0 0 14px;
 }
-.inn-future-note b { color: var(--ink); }
+
+/* ─── "PRINT ALL TABLES" QR SHEET (plan Task 6, spec §8.3) ──────────────
+   .inn-print-sheet is an overlay appended to <body> only while printing is
+   in progress (see printTableQrSheet() in inner.js) — hidden on screen,
+   shown (and everything else hidden) under @media print below, so Ctrl+P /
+   the admin's browser print dialog produces just the table cards, sized
+   for cutting out and standing on a table. */
+.inn-print-sheet { display: none; }
+
+.inn-print-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 18px;
+    border: 1px dashed var(--rule);
+    text-align: center;
+    break-inside: avoid;
+}
+.inn-print-card__name {
+    font-family: var(--serif);
+    font-size: 1.3em;
+    font-weight: 800;
+}
+.inn-print-card__code svg { width: 200px; height: 200px; }
+.inn-print-card__caption {
+    font-size: 0.85em;
+    color: var(--muted);
+}
+
+@media print {
+    /* Hide the whole app UI (topbar, sidebar, modals, toast, …) and show
+       only the print sheet — every one of those lives as a direct child of
+       <body> in inner.html, which is what this selector relies on. */
+    body > *:not(.inn-print-sheet) { display: none !important; }
+
+    .inn-print-sheet {
+        display: grid !important;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+        padding: 16px;
+    }
+}
 
 /* Toast — matches design.css's .ds-toast look */
 .inn-toast {
@@ -1386,6 +1460,40 @@ button.inn-status-pill.unpaid:hover { background: var(--warn); color: #fff; }
     font-size: 0.9em;
     background: var(--panel);
     color: var(--ink);
+}
+
+/* Objednávky u stolu — "Povolit" checkbox (plan Task 6, spec §7). Deliberately
+   NOT styled like .inn-switch-row (which turns red on check, meaning
+   "something's paused/off for customers") — being ON here is the normal,
+   correct end state, so it stays a plain neutral checkbox + hint text. */
+.inn-tableordering-enable-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 2px 2px 16px;
+    cursor: pointer;
+}
+.inn-tableordering-enable-row input[type="checkbox"] {
+    flex-shrink: 0;
+    width: 17px;
+    height: 17px;
+    margin-top: 2px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.inn-tableordering-enable-row span {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.inn-tableordering-enable-row strong {
+    font-size: 0.9em;
+    color: var(--ink);
+}
+.inn-tableordering-enable-row small {
+    font-size: 0.78em;
+    color: var(--muted);
+    line-height: 1.4;
 }
 
 /* Closed days list */
