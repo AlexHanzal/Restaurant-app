@@ -1,0 +1,114 @@
+/* ============================================================================
+   table-page.css — page-specific styles for table.html (guest QR
+   self-order page). Builds on design.css tokens/components AND reuses
+   delivery-page.css wholesale for everything the two pages share (menu
+   sections, dish rows, combo cards/dialog, cart sheet, sticky cart bar —
+   see table.html's <link> order). ONLY what differs from delivery.html
+   lives here: the loading/error screens and the "which table is this"
+   status screen, neither of which delivery.html has.
+   ============================================================================ */
+
+html {
+  overflow-x: hidden;
+}
+body {
+  /* See the identical note in delivery-page.css: overflow-x alone on body
+     would implicitly force overflow-y:auto here too and break the sticky
+     category nav further down the page. */
+  min-height: 100vh;
+  padding-bottom: 40px;
+}
+
+/* ── Table name hero (spec §6 layer 4 — anti-abuse: must be noticed, not
+   just present). Reuses .del-hero's box model, .ds-poster for the actual
+   name so it reads at the same commanding size as delivery.html's "Rozvoz."
+   heading — a guest glancing at their phone should recognise their own
+   table number without having to read fine print. ── */
+.tbl-hero {
+  padding-bottom: 12px;
+}
+.tbl-hero__hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ds-muted);
+}
+
+/* ── Loading screen — centered, quiet; shown for the brief window while
+   GET /table-session/:token resolves. ── */
+.tbl-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  color: var(--ds-muted);
+  font-size: 14px;
+}
+
+/* ── Error screen — invalid token (404) or deleted table (410). Centered,
+   same restrained register as .ds-empty rather than an alarming red wall —
+   the guest's most likely next action is "ask the waiter", not panic. ── */
+.tbl-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 60vh;
+  padding: 40px 24px;
+  text-align: center;
+}
+.tbl-error__icon {
+  font-size: 32px;
+  color: var(--ds-accent);
+}
+.tbl-error__message {
+  max-width: 360px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ds-ink);
+  line-height: 1.5;
+}
+
+/* ── Status screen — Přijato / Připravuje se / Hotovo, the total, and the
+   permanent "Zaplatíte u obsluhy" note (spec D3 — no online payment in
+   this flow at all, unlike delivery.html's payment-method choice). ── */
+.tbl-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 60vh;
+  padding: 40px 24px;
+  text-align: center;
+}
+.tbl-status__icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.tbl-status__label {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  color: var(--ds-ink);
+}
+.tbl-status__order-id {
+  font-size: 12px;
+  color: var(--ds-muted);
+  margin-top: 4px;
+}
+.tbl-status__total {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ds-accent);
+  margin-top: 10px;
+}
+/* Permanent, not conditional on anything — there is no online-payment
+   state machine to reflect here (contrast delivery.html's
+   #orderPaymentStatus, which changes copy as a gateway payment settles). */
+.tbl-status__pay {
+  font-size: 13px;
+  color: var(--ds-ink-soft);
+  margin-top: 4px;
+}

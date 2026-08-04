@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Objednávka u stolu</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/reservation/css/design.css">
+<!-- Reused wholesale (spec 2026-08-04 §8.2): the dish-row / cart-sheet /
+     combo-dialog markup below leans entirely on .del-* classes already
+     defined for the delivery page. table-page.css (loaded after) holds
+     ONLY what this page needs beyond that — the loading/error/status
+     screens and the table-name hero, none of which delivery.html has. -->
+<link rel="stylesheet" href="/reservation/css/delivery-page.css">
+<link rel="stylesheet" href="/reservation/css/table-page.css">
+</head>
+<body>
+
+<header class="ds-page-header">
+  <span class="ds-wordmark">Restaurace</span>
+  <span class="ds-page-header__section">Objednávka u stolu</span>
+</header>
+
+<!-- ── Table name, PROMINENTLY (spec §6 layer 4 — anti-abuse). A guest who
+     scanned the wrong table's code must notice at a glance, not have to
+     hunt for it in fine print. Filled in by table-order.js once
+     GET /table-session/:token resolves; hidden until then so an invalid
+     or deleted-table scan never flashes a blank/wrong heading. ── -->
+<div class="del-hero tbl-hero" id="tableHero" hidden>
+  <h1 class="ds-poster" id="tableNameHeading"></h1>
+  <p class="tbl-hero__hint">Zkontrolujte prosím, že sedíte u tohoto stolu.</p>
+</div>
+
+<!-- ── Loading — shown immediately, replaced once GET /table-session/:token
+     answers (success, or one of the two error screens below). ── -->
+<div class="tbl-loading" id="loadingScreen">
+  <p>Načítám…</p>
+</div>
+
+<!-- ── Error — invalid token (404) or deleted table (410). Distinct copy per
+     spec §5.2; table-order.js fills #errorMessage and never shows the menu
+     underneath it, since there is nothing valid to show. ── -->
+<div class="tbl-error" id="errorScreen" hidden>
+  <p class="tbl-error__icon" aria-hidden="true">⚠</p>
+  <p class="tbl-error__message" id="errorMessage"></p>
+</div>
+
+<!-- ── Menu screen — browsable regardless of whether ordering is currently
+     open (spec §5.2/§8.2: "menu stays browsable; only submit is blocked"),
+     same rule delivery.html applies via #deliveryNotice. ── -->
+<div id="menuScreen" hidden>
+
+  <!-- Shown when settings.tableOrdering is off, or the current time is
+       outside today's ordering hours — server's own Czech notice text
+       (GET /table-session/:token -> ordering.notice), re-confirmed by the
+       server again on submit (POST /table-orders can still 403 even if
+       this banner is hidden, e.g. a tab left open since lunch). -->
+  <div class="del-notice" id="orderingNotice" hidden></div>
+
+  <nav class="del-cat-nav" id="catTabs" aria-label="Kategorie menu"></nav>
+
+  <main class="del-page">
+    <div id="menuSections"></div>
+  </main>
+
+  <!-- ── Sticky cart bar: visible once the cart has items ── -->
+  <button type="button" class="del-cartbar" id="openCartBtn" hidden>
+    <span class="del-cartbar__label">Košík · <span id="cartCount">0</span> položek</span>
+    <span class="del-cartbar__total"><span id="cartBarTotal">0 Kč</span> →</span>
+  </button>
+
+  <!-- ── Cart sheet: items + optional jméno/poznámka + submit. Deliberately
+       NO address / PSČ / phone / e-mail / delivery-fee / minimum-order UI —
+       those are delivery concepts and do not apply to an order placed at a
+       table the guest is already sitting at (spec D5). ── -->
+  <div class="ds-sheet__backdrop" id="cartSheetBackdrop"></div>
+  <div class="ds-sheet" id="cartSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="cartSheetTitle">
+    <div class="ds-sheet__handle"></div>
+    <div class="del-sheet-head">
+      <h3 class="del-sheet-title" id="cartSheetTitle">Váš košík</h3>
+      <button type="button" class="del-sheet-close" id="closeCartBtn" aria-label="Zavřít">&times;</button>
+    </div>
+
+    <div class="del-cart-items" id="cartItems"></div>
+
+    <div class="del-cart-total-row">
+      <span>Celkem</span>
+      <span id="cartTotalText">0 Kč</span>
+    </div>
+
+    <div class="del-field-group">
+      <label for="tblGuestNameInput">Jméno (nepovinné)</label>
+      <input type="text" id="tblGuestNameInput" class="ds-input" maxlength="150" placeholder="Jméno">
+    </div>
+    <div class="del-field-group">
+      <label for="tblNoteInput">Poznámka (nepovinné)</label>
+      <textarea id="tblNoteInput" class="ds-input" maxlength="500" placeholder="Např. bez cibule, alergie…"></textarea>
+    </div>
+
+    <!-- Shown instead of/next to the notice banner above when the guest
+         opens the cart after ordering closed mid-browse — mirrors
+         delivery.html's #checkoutClosedHint. -->
+    <p class="del-payonline-note" id="submitClosedHint" hidden></p>
+    <button type="button" class="ds-btn ds-btn--primary ds-btn--block" id="submitTableOrderBtn">Odeslat objednávku</button>
+    <p class="del-hint">Objednávku uvidí obsluha a kuchyně. Zaplatíte u obsluhy.</p>
+  </div>
+
+  <!-- ── Combo customize sheet ("Zvýhodněná menu") — ported from
+       delivery.js's sheet with full functionality: slot removal, slot
+       swaps, paid extras, per-line note (spec D10). Same markup as
+       delivery.html on purpose, so the port stays a straight copy of the
+       working logic rather than a rewrite. ── -->
+  <div class="ds-sheet__backdrop" id="comboSheetBackdrop"></div>
+  <div class="ds-sheet" id="comboSheet" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="comboSheetTitle">
+    <div class="ds-sheet__handle"></div>
+    <div class="del-sheet-head">
+      <h3 class="del-sheet-title" id="comboSheetTitle">Přizpůsobit menu</h3>
+      <button type="button" class="del-sheet-close" id="comboSheetCloseBtn" aria-label="Zavřít">&times;</button>
+    </div>
+
+    <p class="del-combo-dialog__desc" id="comboDialogDesc"></p>
+
+    <div id="comboSlotsContainer"></div>
+    <div id="comboExtrasContainer"></div>
+
+    <div class="del-field-group">
+      <label for="comboNoteInput">Poznámka (volitelné)</label>
+      <input type="text" id="comboNoteInput" class="ds-input" maxlength="200" placeholder="Např. bez cibule">
+    </div>
+
+    <div class="del-cart-total-row">
+      <span>Cena</span>
+      <span id="comboDialogTotal">0 Kč</span>
+    </div>
+
+    <div class="del-combo-dialog__actions">
+      <button type="button" class="ds-btn ds-btn--ghost" id="comboSheetCancelBtn">Zrušit</button>
+      <button type="button" class="ds-btn ds-btn--primary" id="comboSheetConfirmBtn">Přidat do košíku</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Status screen — shown right after a successful submit, and again on
+     any reload while sessionStorage still holds { orderId, token } for
+     this table's token (spec §8.2: "a refresh must not land in an empty
+     cart"). Polled every 15s by table-order.js; no online payment in this
+     flow (spec D3) — "Zaplatíte u obsluhy" is shown permanently, not just
+     while unpaid. ── -->
+<div id="statusScreen" hidden>
+  <div class="tbl-status">
+    <div class="tbl-status__icon" id="statusIcon" aria-hidden="true">⏳</div>
+    <div class="tbl-status__label" id="statusLabel">Přijato</div>
+    <p class="tbl-status__order-id">Objednávka č. <span id="statusOrderId"></span></p>
+    <p class="tbl-status__total" id="statusTotal"></p>
+    <p class="tbl-status__pay">Zaplatíte u obsluhy.</p>
+  </div>
+</div>
+
+<div class="ds-toast" id="toast"></div>
+
+<!-- SECURITY: no inline scripts — see the identical note in delivery.html;
+     configureHelmet()'s CSP in src/server/server.js drops 'unsafe-inline'
+     from script-src, so every script here is an external file. -->
+<script src="/reservation/config.js"></script>
+<!-- Shared menu data layer — MUST load before table-order.js, which reads
+     window.MenuCatalog at parse time (see menu-catalog.js's own header
+     comment on load order). -->
+<script src="/reservation/js/menu-catalog.js"></script>
+<script src="/reservation/js/table-order.js"></script>
+</body>
+</html>
