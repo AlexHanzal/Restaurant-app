@@ -392,7 +392,21 @@ async function initiateGatewayPayment({ req, kind, target, amountCzk, items, des
     const { returnUrl, notificationUrl } = gatewayCallbackUrls(req, overrideReturnUrl);
     const now = new Date().toISOString();
 
-    if (!paymentsAreConfigured()) {
+    // SECURITY: never fall back to the fake-payment path on a public host —
+    // see gopay.paymentMode()'s header for the free-food scenario this
+    // closes. Refusing here covers all four pay-online call sites at once,
+    // including any added later.
+    const mode = gopay.paymentMode({ configured: paymentsAreConfigured(), isProd });
+    if (mode === "unavailable") {
+        const err = new Error(
+            "Online payments are unavailable: GOPAY_GOID/GOPAY_CLIENT_ID/GOPAY_CLIENT_SECRET are not " +
+            "configured and simulated payments are refused when NODE_ENV=production."
+        );
+        err.code = gopay.ONLINE_PAYMENTS_UNAVAILABLE;
+        throw err;
+    }
+
+    if (mode === "simulated") {
         const gatewayTransactionId = `SIMULATED-${generateFileId()}`;
         db.set(COL.payments, gatewayTransactionId, {
             id: gatewayTransactionId,
@@ -431,6 +445,22 @@ async function initiateGatewayPayment({ req, kind, target, amountCzk, items, des
     });
 
     return { simulated: false, gatewayTransactionId, redirectUrl: payment.gw_url };
+}
+
+// Shared catch handler for the three pay-online routes. Separates "this
+// deployment will not start an online payment" (503 — a configuration state
+// the customer can act on by paying another way) from "the gateway call
+// itself blew up" (500). Without the split, a deliberate refusal would read
+// to the customer, and in the logs, as a transient gateway error.
+function respondPaymentStartFailure(res, e, context) {
+    if (e && e.code === gopay.ONLINE_PAYMENTS_UNAVAILABLE) {
+        console.error(`💳 ${context}: refused to start an online payment — ${e.message}`);
+        return res.status(503).json({
+            error: "Online platby nejsou momentálně dostupné. Zvolte prosím jinou platební metodu.",
+        });
+    }
+    console.error(`${context}:`, e);
+    return res.status(500).json({ error: "Nepodařilo se zahájit platbu" });
 }
 
 // Applies a verified GoPay payment state to whatever the payment record
@@ -3561,8 +3591,7 @@ function setupAPIRoutes() {
             db.set(COL.orders, id, order);
             res.json({ success: true, order, redirectUrl: payment.redirectUrl, simulated: payment.simulated });
         } catch (e) {
-            console.error("Payment creation failed:", e);
-            res.status(500).json({ error: "Nepodařilo se zahájit platbu" });
+            respondPaymentStartFailure(res, e, "Payment creation failed");
         }
     });
 
@@ -3619,6 +3648,24 @@ function setupAPIRoutes() {
         try {
             let state;
             if (record.simulated) {
+                // SECURITY: this branch confirms a payment on nothing but the
+                // caller knowing an id — that is only ever acceptable on a
+                // developer's machine. In production, refuse: a record like
+                // this can only predate the guard in initiateGatewayPayment
+                // (which now refuses to mint one), so confirming it would be
+                // exactly the free-food path gopay.paymentMode() describes.
+                //
+                // 200 anyway — a real gateway retries any non-2xx, and there
+                // is genuinely nothing to do — but nothing is written.
+                if (isProd) {
+                    console.error(
+                        `💳 [Webhook] REFUSED to confirm SIMULATED payment ${gatewayTransactionId} ` +
+                        `(kind=${record.kind}) in production. Nothing was marked paid, no receipt was ` +
+                        `issued and no EET record was filed. Configure GOPAY_GOID/GOPAY_CLIENT_ID/` +
+                        `GOPAY_CLIENT_SECRET, or settle this order by another method.`
+                    );
+                    return res.status(200).json({ received: true, ignored: "simulated-payment-in-production" });
+                }
                 // No real gateway to ask for simulated payments — this GET/POST
                 // hitting the webhook *is* the simulated confirmation (see the
                 // console log printed when the payment was created).
@@ -3936,8 +3983,7 @@ function setupAPIRoutes() {
                 gatewayTransactionId: payment.gatewayTransactionId,
             });
         } catch (e) {
-            console.error("Reservation online payment failed:", e);
-            res.status(500).json({ error: "Nepodařilo se zahájit platbu" });
+            respondPaymentStartFailure(res, e, "Reservation online payment failed");
         }
     });
 
@@ -4102,8 +4148,7 @@ function setupAPIRoutes() {
                 gatewayTransactionId: payment.gatewayTransactionId,
             });
         } catch (e) {
-            console.error("Indoor online payment failed:", e);
-            res.status(500).json({ error: "Nepodařilo se zahájit platbu" });
+            respondPaymentStartFailure(res, e, "Indoor online payment failed");
         }
     });
 
@@ -5146,8 +5191,18 @@ async function start() {
         console.warn("⚠️  Twilio not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER) — verification codes will be logged to the console instead of sent as real SMS.");
     }
 
-    if (!paymentsAreConfigured()) {
-        console.warn(`⚠️  GoPay not configured (GOPAY_GOID/GOPAY_CLIENT_ID/GOPAY_CLIENT_SECRET) — online-card payments will be simulated and logged to the console instead of hitting a real gateway (sandbox: ${SERVER_CONFIG.payments.sandbox}).`);
+    if (!paymentsAreConfigured() && isProd) {
+        // Not a warning — a statement of what the app will now refuse to do.
+        // The old message said "simulated", which in production described a
+        // free-food hole rather than a fallback (see gopay.paymentMode()).
+        console.error(
+            "🛑 GoPay not configured (GOPAY_GOID/GOPAY_CLIENT_ID/GOPAY_CLIENT_SECRET) and NODE_ENV=production — " +
+            "ONLINE CARD PAYMENTS ARE DISABLED. Every pay-online request answers 503 and customers must pay by " +
+            "another method. Simulated payments are refused here on purpose: they mark orders paid that nobody " +
+            "paid for. Set the three GOPAY_* variables to enable online payments."
+        );
+    } else if (!paymentsAreConfigured()) {
+        console.warn(`⚠️  GoPay not configured (GOPAY_GOID/GOPAY_CLIENT_ID/GOPAY_CLIENT_SECRET) — online-card payments will be simulated and logged to the console instead of hitting a real gateway (sandbox: ${SERVER_CONFIG.payments.sandbox}). This fallback is DEVELOPMENT ONLY; it is refused when NODE_ENV=production.`);
     } else {
         console.log(`💳 GoPay configured — ${SERVER_CONFIG.payments.sandbox ? "SANDBOX" : "PRODUCTION"} (goid ${SERVER_CONFIG.payments.goid})`);
     }

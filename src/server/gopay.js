@@ -34,6 +34,42 @@
 const SANDBOX_BASE_URL = "https://gw.sandbox.gopay.com/api";
 const PRODUCTION_BASE_URL = "https://gate.gopay.cz/api";
 
+// ── WHICH PAYMENT PATH THIS DEPLOYMENT MAY USE ──────────────────────────
+//
+// SECURITY. The simulated path exists so a laptop works without GoPay
+// credentials: initiateGatewayPayment() mints a "SIMULATED-<id>" transaction
+// and gopayWebhookHandler() treats any notification naming it as PAID,
+// because there is no real gateway to ask for the true state.
+//
+// On a public host that is a free-food machine. The pay-online routes hand
+// the caller its own gatewayTransactionId in the response body, and the
+// webhook is deliberately unauthenticated (a gateway has no session). So a
+// guest can place an order, tap "pay online", read the id out of their own
+// JSON response, request GET /api/payments/gopay/webhook?id=<it>, and have
+// the order marked paid — receipt issued and EET filed — having paid nothing.
+//
+// Before this, the only thing standing between a deployment and that state
+// was a console.warn at boot, and .env.example ships GOPAY_* empty. Missing
+// credentials in production must therefore REFUSE, which is a materially
+// different outcome from simulating: an unavailable online payment is a
+// customer paying another way, a simulated one is an order nobody paid for.
+//
+// Pure and exported so the decision is testable without standing up a server
+// — see tests/unit/payment-mode.test.js.
+//
+//   "live"        — real GoPay call.
+//   "simulated"   — dev fallback, console-logged, no money moves.
+//   "unavailable" — refuse; callers surface it to the customer.
+function paymentMode({ configured, isProd }) {
+    if (configured) return "live";
+    return isProd ? "unavailable" : "simulated";
+}
+
+// Thrown by initiateGatewayPayment() when paymentMode() says "unavailable",
+// so route handlers can tell "we will not do this" apart from "the gateway
+// call failed" and answer 503 rather than 500.
+const ONLINE_PAYMENTS_UNAVAILABLE = "ONLINE_PAYMENTS_UNAVAILABLE";
+
 // Card, Google Pay and Apple Pay are the standard "let the gateway's own
 // UI pick" set; bank transfer ("BANK_ACCOUNT") is included too since it's
 // commonly offered alongside cards for CZ customers. GoPay's payment page
@@ -180,6 +216,8 @@ async function refundPayment(config, paymentId, amountCzk) {
 module.exports = {
     SANDBOX_BASE_URL,
     PRODUCTION_BASE_URL,
+    ONLINE_PAYMENTS_UNAVAILABLE,
+    paymentMode,
     getAccessToken,
     createPayment,
     getPaymentStatus,

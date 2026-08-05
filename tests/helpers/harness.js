@@ -64,6 +64,8 @@ const COL = {
     indoorOrders: "indoor_orders",
     menu: "menu",
     settings: "settings",
+    payments: "payments",
+    orders: "orders",
 };
 const MENU_SINGLETON_ID = "singleton";
 const SETTINGS_ID = "restaurant";
