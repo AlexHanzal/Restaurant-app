@@ -24,7 +24,7 @@ const { TIMEZONE } = require("./timezone");
 const SERVER_CONFIG = {
     port: process.env.PORT || 3000,
     basePath: "/reservation",
-    appName: "School Reservation System",
+    appName: "Restaurant System",
     apiVersion: "1.0",
     // SECURITY (3rd hardening pass): the old `corsOrigins: "all"` flag that
     // used to live here is gone — CORS is no longer a static on/off switch,

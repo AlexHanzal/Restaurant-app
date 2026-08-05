@@ -1,7 +1,8 @@
 {
-  "name": "school-reservation-system",
+  "name": "restaurant-system",
   "version": "1.0.0",
-  "description": "School Reservation System - A web application for managing school resource reservations",
+  "private": true,
+  "description": "Czech restaurant web app: SMS-verified table reservations, delivery ordering with GoPay, QR self-order at the table, kitchen/driver/admin surfaces, offline-first POS and EET 2.0 reporting.",
   "main": "src/server/server.js",
   "scripts": {
     "start": "node src/server/server.js",
@@ -12,14 +13,17 @@
     "test:smoke": "node --test \"tests/smoke/**/*.test.js\""
   },
   "keywords": [
-    "school",
-    "reservation",
-    "timetable",
-    "management",
-    "web-app"
+    "restaurant",
+    "reservations",
+    "delivery",
+    "pos",
+    "eet",
+    "gopay",
+    "express",
+    "sqlite"
   ],
   "author": "Alex Hanzal",
-  "license": "Ligma Balls s.r.o.",
+  "license": "UNLICENSED",
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.11.1",
@@ -35,6 +39,6 @@
     "zod": "^4.4.3"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=20 <27"
   }
 }

@@ -1,8 +1,8 @@
 // ============================================================================
-// FRONTEND CONFIGURATION - School Reservation System
+// FRONTEND CONFIGURATION - Restaurant System
 // ============================================================================
 
-// Configuration for the School Reservation System frontend
+// Configuration for the Restaurant System frontend
 // This file should be included before renderer.js
 
 // AUTO-CONFIGURATION: Try to detect backend server automatically
