@@ -3587,9 +3587,21 @@ function setupAPIRoutes() {
                 orderNumber: id,
                 returnUrl: req.body?.returnUrl,
             });
-            order.gatewayTransactionId = payment.gatewayTransactionId;
-            db.set(COL.orders, id, order);
-            res.json({ success: true, order, redirectUrl: payment.redirectUrl, simulated: payment.simulated });
+            // db.patch for the same reason as the indoor pay-online route
+            // below: `order` predates the await, and the kitchen board was
+            // already told about this order by the broadcastBoardEvent()
+            // above, so a cook can have touched it while GoPay was being
+            // called. Only the transaction id belongs to this request.
+            const updated = db.patch(COL.orders, id, {
+                gatewayTransactionId: payment.gatewayTransactionId,
+            });
+            if (updated) order.gatewayTransactionId = payment.gatewayTransactionId;
+            res.json({
+                success: true,
+                order: updated || order,
+                redirectUrl: payment.redirectUrl,
+                simulated: payment.simulated,
+            });
         } catch (e) {
             respondPaymentStartFailure(res, e, "Payment creation failed");
         }
@@ -4137,9 +4149,27 @@ function setupAPIRoutes() {
                 orderNumber: order.id,
                 returnUrl: req.body?.returnUrl,
             });
-            order.gatewayTransactionId = payment.gatewayTransactionId;
-            order.paymentMethod = "online_card";
-            db.set(COL.indoorOrders, order.id, order);
+            // db.patch, not db.set: `order` was read BEFORE the await above,
+            // and initiateGatewayPayment is a real network round trip to
+            // GoPay. Writing the whole stale object back reverted anything
+            // that happened to this order in the meantime — most realistically
+            // the cook tapping "hotovo", which put the ticket straight back on
+            // the kitchen board with nothing in any log to explain it. Only
+            // the two payment fields belong to this request. See db.patch().
+            const updated = db.patch(COL.indoorOrders, order.id, {
+                gatewayTransactionId: payment.gatewayTransactionId,
+                paymentMethod: "online_card",
+            });
+            // Deleted while GoPay was being called. The payment is real and
+            // already started, so this is worth a log rather than a silent
+            // pass — but there is no order left to attach it to, and
+            // recreating one from a stale copy would be worse.
+            if (!updated) {
+                console.error(
+                    `💳 Indoor order ${order.id} disappeared while its GoPay payment ` +
+                    `(${payment.gatewayTransactionId}) was being created — nothing to update.`
+                );
+            }
             broadcastBoardEvent();
             res.json({
                 success: true,
