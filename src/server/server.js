@@ -163,6 +163,7 @@ const offlineSaleRules = require("./offline-sale"); // paidAt clamping + client-
 const V = require("./validation"); // input validation (zod schemas + validate()/validateParams() middleware) — see validation.js
 const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/sales — see sales-stats.js
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
+const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
 // One-tap "Objednat znovu" (reorder) — docs/superpowers/specs/2026-07-25-
 // reorder-design.md. Self-contained module (token sign/verify, pending-code
@@ -3827,7 +3828,13 @@ function setupAPIRoutes() {
                 indoor.push(...collectIndoorOrderEvents(data));
             }
 
-            for (const o of db.list(COL.indoorOrders)) {
+            // Retire finished tickets the kitchen no longer needs to see, so
+            // this route's cost tracks the restaurant's WORKLOAD rather than
+            // its whole history — db.list() parses every row of a collection,
+            // and the board refetches on every order event. Anything still
+            // outstanding is kept regardless of age; see kitchen-board.js.
+            const boardNow = new Date();
+            for (const o of kitchenBoard.filterForBoard(db.list(COL.indoorOrders), { now: boardNow })) {
                 indoor.push({
                     kind: "walkin",
                     id: o.id,
@@ -3859,7 +3866,8 @@ function setupAPIRoutes() {
                 return bKey.localeCompare(aKey);
             });
 
-            const delivery = db.list(COL.orders);
+            // Same window as the indoor rows above.
+            const delivery = kitchenBoard.filterForBoard(db.list(COL.orders), { now: boardNow });
             delivery.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
             res.json({ indoor, delivery });
