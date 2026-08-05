@@ -18,16 +18,43 @@ Web application for a Czech restaurant: table reservations with SMS verification
 ```bash
 npm ci
 npm start                      # serves everything on PORT (default 3000)
-node deploy/create-admin.js "Jméno" login "heslo"   # bootstrap the first admin
 ```
 
-Without Twilio/GoPay/SMTP credentials the app runs in fallback mode: SMS codes and e-mails are logged to the console, payments are simulated. See `deploy/env.example` for every environment variable.
+Without Twilio/GoPay/SMTP credentials the app runs in fallback mode: SMS codes and e-mails are logged to the console, payments are simulated. See `.env.example` in the repo root for every environment variable.
+
+### The first admin account
+
+The app is installed together with a database that already contains one, so
+normally there is nothing to do here.
+
+Worth knowing if you ever start from a genuinely empty `data/app.db`: there is
+no bootstrap script in this repo, and no way in through the API — `POST
+/api/users` is behind `requireAdmin`, and `initializeData()` seeds only the
+menu and combos singletons, never a user. Either restore a database that has
+an admin, or insert a row into the `users` collection by hand with a bcrypt
+hash at cost 12 (the shape is `{ id, abbreviation, password, name, isAdmin,
+isDriver }` — see `src/server/auth.js` and the `seedAdminUser` helper in
+`tests/smoke/table-orders.test.js` for a working example).
 
 ## Production
 
-- `deploy/NASAZENI.md` — Czech runbook: Ubuntu VPS from zero (systemd + Caddy + HTTPS + backups)
-- `deploy/GO-LIVE-CHECKLIST.md` — Czech go-live checklist: GoPay merchant account, Twilio sender, DNS, legal review, test matrix
-- `docs/CZ-PAYMENTS-SETUP.md` — payments/receipts specifics
+Set `TZ` (see `.env.example`). It defaults to `Europe/Prague`, which is what
+this restaurant wants; the boot log prints the zone in effect, and it is worth
+checking after the first deploy. Opening hours, the polední-menu window, which
+day a sale lands on in the sales view and when reservation reminders fire are
+all local-time rules, so a wrong zone shifts every one of them silently.
+
+**The deployment runbooks are not in this repository.** `PRED-NAHRANIM.md`
+explains why: `deploy/NASAZENI.md` (Ubuntu VPS runbook — systemd + Caddy +
+HTTPS + backups), `deploy/GO-LIVE-CHECKLIST.md` (GoPay merchant account,
+Twilio sender, DNS, legal review, test matrix), `docs/CZ-PAYMENTS-SETUP.md`,
+`deploy/create-admin.js`, `deploy/backup.sh`, `deploy/Caddyfile`,
+`deploy/restaurace.service` and `tools/` were all cloud-only OneDrive stubs
+that could not be read when this repo was assembled, so they were deliberately
+left out rather than published unread. They are still in the original
+`Landing-app-1-main` folder — make them available offline in Explorer ("Always
+keep on this device"), check them for real credentials, and only then add them
+here.
 
 ## EET 2.0 — elektronická evidence tržeb
 
@@ -156,4 +183,18 @@ arguments, so a narrowed implementation has a test in place to update.
 
 ## Design docs
 
-Specs and implementation plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/` — start with `2026-07-19-go-live-operations-design.md`.
+Specs and implementation plans live in `docs/superpowers/specs/` and
+`docs/superpowers/plans/`, one pair per feature — floorplan, room-shape
+editing, EET 2.0, offline-first POS, sales stats, table-QR self-order. Start
+with `docs/superpowers/specs/2026-08-04-table-qr-self-order-design.md`, the
+most recent one.
+
+Note that only the readable subset came across when this repo was assembled
+(again, see `PRED-NAHRANIM.md`), so some code comments cite design docs that
+are not here — `2026-07-19-go-live-operations-design.md`,
+`2026-07-22-combo-menus-design.md` and `2026-07-25-reorder-design.md` among
+them. The code is the source of truth where they disagree.
+
+`docs/2026-07-29-security-audit-vibecode-checklist.md` is the standing
+security audit; findings referenced as "audit 2026-07-29, finding F<n>" in
+source comments point at it.
