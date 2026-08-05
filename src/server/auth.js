@@ -4,8 +4,19 @@
 // Design:
 //   - Passwords hashed with bcryptjs (cost 12) at rest.
 //   - On successful login, server issues a signed JWT in an httpOnly cookie
-//     ("auth_token"). No server-side session store needed — stateless, and
-//     survives Render restarts / multiple instances without Redis.
+//     ("auth_token"). No server-side session store needed — stateless, so a
+//     session survives a restart/redeploy without Redis.
+//
+//     Read that as a claim about THIS module only. The app as a whole is
+//     single-instance: several things that would need sharing across
+//     processes are plain in-memory objects — the per-account lockout map
+//     and the express-rate-limit stores in security.js, pendingVerifications
+//     in server.js, and the connected-SSE-client set behind
+//     broadcastBoardEvent(). Run two instances and lockouts/limits apply per
+//     process and board events reach only the clients attached to the one
+//     that handled the write. Sessions would keep working; nothing else
+//     listed here would. Scale by making the single instance bigger, or make
+//     that state shared first.
 //   - requireAuth / requireAdmin / requireDriver read + verify that cookie
 //     and attach `req.user` = { id, name, isAdmin, isDriver }.
 //

@@ -15,9 +15,15 @@ Web application for a Czech restaurant: table reservations with SMS verification
 
 ## Quick start (development)
 
+**Node 20–26.** The lower bound is better-sqlite3, which ships prebuilt
+binaries only for 20.x and up; the upper bound is the newest major it
+currently builds for. `node --test` with glob patterns (used by the test
+scripts) needs 18+.
+
 ```bash
 npm ci
 npm start                      # serves everything on PORT (default 3000)
+npm test                       # unit + smoke
 ```
 
 Without Twilio/GoPay/SMTP credentials the app runs in fallback mode: SMS codes and e-mails are logged to the console, payments are simulated. See `.env.example` in the repo root for every environment variable.
@@ -43,6 +49,21 @@ this restaurant wants; the boot log prints the zone in effect, and it is worth
 checking after the first deploy. Opening hours, the polední-menu window, which
 day a sale lands on in the sales view and when reservation reminders fire are
 all local-time rules, so a wrong zone shifts every one of them silently.
+
+### Run exactly one instance
+
+This app is single-instance by design. Sessions are stateless JWTs and would
+survive being spread across processes, but several things behind them are
+plain in-memory state and would not: the per-account login lockout map and the
+rate-limit stores (`src/server/security.js`), the pending SMS verification map
+(`src/server/server.js`), and the connected-client set behind
+`broadcastBoardEvent()`. With two instances, lockouts and rate limits would
+apply per process, and a kitchen board would only receive live updates for
+orders that happened to land on the instance it is connected to.
+
+Scale by giving the one instance more resources. Sharing that state (Redis or
+equivalent) is the prerequisite for anything else, and `data/app.db` — a
+single SQLite file — would need addressing at the same time.
 
 **The deployment runbooks are not in this repository.** `PRED-NAHRANIM.md`
 explains why: `deploy/NASAZENI.md` (Ubuntu VPS runbook — systemd + Caddy +
