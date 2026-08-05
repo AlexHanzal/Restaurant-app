@@ -259,6 +259,94 @@ function getRecentLoginAudit(limit = 200) {
     return rows.slice(0, Math.max(1, Math.min(limit, 1000)));
 }
 
+// ── LOGIN AUDIT RETENTION ────────────────────────────────────────────────
+//
+// Nothing used to remove an audit row, and getRecentLoginAudit() above reads
+// the WHOLE collection (db.list parses every row) and sorts it just to return
+// the newest 200 — so opening the security page got slower with every login
+// the restaurant had ever performed, forever.
+//
+// Two independent bounds, because they fail in different directions:
+//   - AGE covers the ordinary case: years of routine staff logins.
+//   - A ROW CAP covers the burst case: a credential-stuffing run writes rows
+//     far faster than any sane retention window would ever expire them (the
+//     limiters bound the rate, not the total), and all of them are minutes
+//     old, so age alone would never touch them.
+//
+// Fails SAFE, which is the opposite of the kitchen board's rule: a row whose
+// timestamp cannot be parsed is KEPT. An audit row is a security record, and
+// losing evidence is worse than carrying a stray row. A missing/zero/negative
+// option likewise falls back to the default rather than deleting everything —
+// the failure mode of a bad config here is an erased audit trail.
+const LOGIN_AUDIT_RETENTION_DAYS = parseInt(process.env.LOGIN_AUDIT_RETENTION_DAYS, 10) || 90;
+const LOGIN_AUDIT_MAX_ROWS = parseInt(process.env.LOGIN_AUDIT_MAX_ROWS, 10) || 5000;
+
+// Pure: takes rows, returns the ids to delete. Exported for its own sake so
+// the retention rule is testable without a database — see
+// tests/unit/login-audit-retention.test.js.
+function selectExpiredAuditIds(rows, opts = {}) {
+    if (!Array.isArray(rows)) return [];
+
+    const now = opts.now instanceof Date ? opts.now : new Date();
+    const nowMs = now.getTime();
+
+    const days = Number(opts.retentionDays);
+    const retentionDays = Number.isFinite(days) && days > 0 ? days : LOGIN_AUDIT_RETENTION_DAYS;
+    const cutoff = nowMs - retentionDays * 24 * 60 * 60 * 1000;
+
+    const cap = Number(opts.maxRows);
+    const maxRows = Number.isFinite(cap) && cap > 0 ? cap : LOGIN_AUDIT_MAX_ROWS;
+
+    const doomed = new Set();
+
+    for (const r of rows) {
+        const t = r && r.at ? new Date(r.at).getTime() : NaN;
+        if (!Number.isFinite(t)) continue; // undateable — keep it, see above
+        if (t < cutoff) doomed.add(r.id);
+    }
+
+    // Then the cap, over what would survive the age pass. Undateable rows sort
+    // last (treated as oldest) so a flood of them can still be trimmed rather
+    // than becoming a permanent, unprunable floor.
+    const survivors = rows.filter(r => r && !doomed.has(r.id));
+    if (survivors.length > maxRows) {
+        survivors
+            .slice()
+            .sort((a, b) => {
+                const ta = a.at ? new Date(a.at).getTime() : NaN;
+                const tb = b.at ? new Date(b.at).getTime() : NaN;
+                return (Number.isFinite(tb) ? tb : -Infinity) - (Number.isFinite(ta) ? ta : -Infinity);
+            })
+            .slice(maxRows)
+            .forEach(r => doomed.add(r.id));
+    }
+
+    return [...doomed];
+}
+
+// Applies the rule. Best-effort by design: a prune that throws must never be
+// able to take down logins, which is why the caller is an unref'd interval
+// and every failure is swallowed with a log.
+function pruneLoginAudit(now = new Date()) {
+    try {
+        const expired = selectExpiredAuditIds(db.list(LOGIN_AUDIT_COLLECTION), { now });
+        for (const id of expired) db.remove(LOGIN_AUDIT_COLLECTION, id);
+        if (expired.length) {
+            console.log(`🧹 Login audit: pruned ${expired.length} expired entr${expired.length === 1 ? "y" : "ies"}.`);
+        }
+        return expired.length;
+    } catch (e) {
+        console.error("Failed to prune the login audit log:", e.message);
+        return 0;
+    }
+}
+
+// Once at startup (so a long-running deployment that never restarts is not
+// the only thing keeping the table trimmed), then hourly. Unref'd so it never
+// holds the process open on its own — same pattern as the lockout sweep above.
+setTimeout(() => pruneLoginAudit(), 10 * 1000).unref();
+setInterval(() => pruneLoginAudit(), 60 * 60 * 1000).unref();
+
 // ── TIMING-SAFE "ACCOUNT NOT FOUND" HANDLING ────────────────────────────
 // A fixed bcrypt hash of a random value nobody knows, computed once at
 // startup. When the looked-up account doesn't exist, compare the submitted
@@ -284,6 +372,10 @@ module.exports = {
     clearFailedLogins,
     logLoginAudit,
     getRecentLoginAudit,
+    selectExpiredAuditIds,
+    pruneLoginAudit,
+    LOGIN_AUDIT_RETENTION_DAYS,
+    LOGIN_AUDIT_MAX_ROWS,
     dummyCompare,
     LOCKOUT_THRESHOLD,
     LOCKOUT_DURATION_MS,
