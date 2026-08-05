@@ -14,6 +14,13 @@
 // you have existing data/*.json files you want carried over.
 // ============================================================================
 
+// FIRST REQUIRE IN THE PROCESS, deliberately — this pins process.env.TZ
+// before any other module can format a Date and have Node cache a different
+// zone. Every opening-hours and day-boundary rule in this app is written in
+// local time, and a container's default UTC is two hours off in Czech summer.
+// See timezone.js's header for the full list of what that silently breaks.
+const { TIMEZONE } = require("./timezone");
+
 const SERVER_CONFIG = {
     port: process.env.PORT || 3000,
     basePath: "/reservation",
@@ -5126,6 +5133,14 @@ async function start() {
     };
     pruneIdempotency();
     setInterval(pruneIdempotency, 60 * 60 * 1000).unref();
+
+    // Printed unconditionally, unlike the warnings below: a wrong timezone
+    // never announces itself as an error, it just reports the wrong day. The
+    // one place it can be caught is someone reading the boot log and noticing
+    // the zone is not the one the restaurant is in. Local time is shown next
+    // to it because "Europe/Prague" alone doesn't prove the host has the
+    // tzdata to honour it.
+    console.log(`🕒 Timezone: ${TIMEZONE} (local time now: ${new Date().toLocaleString("cs-CZ")})`);
 
     if (!smsIsConfigured()) {
         console.warn("⚠️  Twilio not configured (TWILIO_ACCOUNT_SID/TWILIO_AUTH_TOKEN/TWILIO_FROM_NUMBER) — verification codes will be logged to the console instead of sent as real SMS.");
