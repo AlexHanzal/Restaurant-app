@@ -90,12 +90,6 @@ async function comparePassword(plain, hash) {
     return bcrypt.compare(plain, hash);
 }
 
-// Detects an existing bcrypt hash (all bcryptjs/bcrypt variants) so the
-// migration script can skip already-hashed rows safely.
-function looksLikeBcryptHash(str) {
-    return typeof str === "string" && /^\$2[aby]\$\d{2}\$/.test(str);
-}
-
 // ── TOKEN ────────────────────────────────────────────────────────────────
 
 function signToken(payload) {
@@ -265,7 +259,6 @@ function requireStaff(req, res, next) {
 module.exports = {
     hashPassword,
     comparePassword,
-    looksLikeBcryptHash,
     signToken,
     verifyToken,
     issueSessionCookie,

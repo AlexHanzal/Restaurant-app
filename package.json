@@ -7,7 +7,6 @@
     "start": "node src/server/server.js",
     "dev": "node src/server/server.js",
     "server": "node src/server/server.js",
-    "migrate:hash-passwords": "node src/server/migrate-hash-passwords.js",
     "test": "node --test",
     "test:unit": "node --test \"tests/unit/**/*.test.js\"",
     "test:smoke": "node --test \"tests/smoke/**/*.test.js\""
