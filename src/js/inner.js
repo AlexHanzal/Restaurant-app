@@ -283,7 +283,18 @@ function isAdmin() {
 function applySessionToUI() {
     document.body.classList.toggle('is-admin', !!(currentUser && currentUser.isAdmin));
     document.querySelectorAll('.admin-only').forEach(el => {
-        el.style.display = (currentUser && currentUser.isAdmin) ? '' : 'none';
+        // Some admin-only elements (e.g. #viewDailyMenuBtn) are ALSO feature-
+        // gated via data-feature. This loop runs on every login/session
+        // restore and would otherwise unconditionally re-show such an
+        // element for an admin, undoing the one-time [data-feature] hide
+        // further down and reopening a tab whose routes 404. Checking
+        // window.APP_FEATURES here (same source the [data-feature] pass
+        // below reads) keeps a feature-disabled element hidden regardless of
+        // session state, without re-running a second querySelectorAll pass
+        // on every session change.
+        const feature = el.getAttribute('data-feature');
+        const featureOff = feature && !(window.APP_FEATURES && window.APP_FEATURES[feature]);
+        el.style.display = (currentUser && currentUser.isAdmin && !featureOff) ? '' : 'none';
     });
     document.getElementById('loggedInUserText').textContent = currentUser
         ? `${currentUser.name} (${currentUser.abbreviation})${currentUser.isAdmin ? ' — admin' : ''}`
