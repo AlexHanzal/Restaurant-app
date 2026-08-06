@@ -7,7 +7,10 @@
 // ════════════════════════════════════════════════════════════════════════
 
 const API_BASE_URL = window.API_BASE_URL || `http://${window.location.hostname}:3000`;
-const API_URL = `${API_BASE_URL}/reservation/api`;
+// window.APP_BASE_PATH comes from config.js (server.basePath — see brand.js),
+// which loads before this file on every page. Falls back to "/reservation"
+// so a stale cached config.js degrades rather than breaking (finding C2).
+const API_URL = `${API_BASE_URL}${window.APP_BASE_PATH || '/reservation'}/api`;
 
 // Menu data layer, shared with the QR table-order page — see
 // src/js/menu-catalog.js. Loaded by a <script> tag ahead of this file.
@@ -1406,7 +1409,7 @@ function renderReorderPhoneStep(errorMsg) {
         </div>
         <p class="del-reorder-error" id="reorderPhoneError"${errorMsg ? '' : ' hidden'}>${escapeHtml(errorMsg || '')}</p>
         <button type="button" class="ds-btn ds-btn--primary ds-btn--block" id="reorderSendCodeBtn">Poslat kód</button>
-        <p class="del-reorder-note">Po ověření si toto zařízení zapamatuje Vaše číslo na 90 dní, abyste ho nemuseli zadávat znovu. Kdykoli to zrušíte tlačítkem „Nejsem to já“. Více v <a href="/reservation/ochrana-osobnich-udaju" target="_blank" rel="noopener">Ochraně osobních údajů</a>.</p>
+        <p class="del-reorder-note">Po ověření si toto zařízení zapamatuje Vaše číslo na 90 dní, abyste ho nemuseli zadávat znovu. Kdykoli to zrušíte tlačítkem „Nejsem to já“. Více v <a href="${window.APP_BASE_PATH || '/reservation'}/ochrana-osobnich-udaju" target="_blank" rel="noopener">Ochraně osobních údajů</a>.</p>
     `;
     document.getElementById('reorderSendCodeBtn').addEventListener('click', () => {
         const phone = document.getElementById('reorderPhoneInput').value.trim();

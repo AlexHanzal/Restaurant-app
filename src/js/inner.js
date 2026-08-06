@@ -4,7 +4,10 @@
 
 const urlParams = new URLSearchParams(window.location.search);
 let API_BASE_URL = urlParams.get('api') || window.API_BASE_URL || `http://${window.location.hostname}:3000`;
-let API_URL = `${API_BASE_URL}/reservation/api`;
+// window.APP_BASE_PATH comes from config.js (server.basePath — see brand.js),
+// which loads before this file on every page. Falls back to "/reservation"
+// so a stale cached config.js degrades rather than breaking (finding C2).
+let API_URL = `${API_BASE_URL}${window.APP_BASE_PATH || '/reservation'}/api`;
 
 let tables = {};          // name -> timetable object (as returned by API, plus fileId)
 let selectedTableName = null;
@@ -163,7 +166,7 @@ function showToastWithReceipt(msg, receiptId) {
 
 async function tryConnect(url) {
     API_BASE_URL = url.replace(/\/$/, '');
-    API_URL = `${API_BASE_URL}/reservation/api`;
+    API_URL = `${API_BASE_URL}${window.APP_BASE_PATH || '/reservation'}/api`;
     try {
         const res = await fetch(`${API_BASE_URL}/`);
         if (!res.ok) throw new Error('bad status');
@@ -793,10 +796,25 @@ function posTimeLabel(iso) {
 let indoorWalkinOrders = []; // walk-in table orders (no reservation) — see fetchIndoorWalkinOrders
 
 async function fetchIndoorWalkinOrders() {
+    // Finding I1: GET /indoor-orders is requireFeature("pos") on the server
+    // — with pos:false it does not exist at all, so there is nothing to
+    // fetch. Skip the call entirely rather than treating a guaranteed 404
+    // as evidence the network is down (see the 404 handling below for the
+    // second half of this fix — belt and braces, in case this function is
+    // ever called before window.APP_FEATURES is known to be current).
+    if (!(window.APP_FEATURES && window.APP_FEATURES.pos)) {
+        indoorWalkinOrders = [];
+        return;
+    }
+
     let serverList = null;
     try {
         const res = await apiFetch(`${API_URL}/indoor-orders`);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+            const err = new Error('HTTP ' + res.status);
+            err.status = res.status;
+            throw err;
+        }
         serverList = await res.json();
         // The server answered — real evidence the network works, which is
         // the only kind the status pill accepts.
@@ -806,7 +824,11 @@ async function fetchIndoorWalkinOrders() {
         if (posReady) await POSDB.serverOrders.bulkPut(serverList);
     } catch (e) {
         console.error('Failed to load walk-in orders', e);
-        if (typeof POSSync !== 'undefined') POSSync.noteContact(false);
+        // A 404 is evidence the route does not exist (e.g. pos disabled on
+        // the server while this tab still holds a stale APP_FEATURES), not
+        // evidence the server is unreachable — it must not flip the status
+        // pill to offline and disable the admin panel's other tabs (I1).
+        if (e.status !== 404 && typeof POSSync !== 'undefined') POSSync.noteContact(false);
         // Offline: fall back to the last known server state instead of
         // blanking the screen. An empty list here would read as "no open
         // tabs", which is a far more dangerous lie than stale data.

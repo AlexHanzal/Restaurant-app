@@ -78,3 +78,10 @@ if (window.fetch) {
 // silently kill whichever file loaded second.
 window.APP_FEATURES = {{APP_FEATURES_JSON}};
 window.APP_BRAND = {{APP_BRAND_JSON}};
+// server.basePath (default "/reservation"), consumed by every page script
+// that builds its own API_URL — see the "API base path" note near the top
+// of renderer.js/inner.js/delivery.js/driver.js/kitchen.js/table-order.js.
+// This file loads before every one of them on every page, so the value is
+// always present there; those files still fall back to "/reservation" of
+// their own accord in case a stale cached copy of THIS file is ever served.
+window.APP_BASE_PATH = {{APP_BASE_PATH_JSON}};

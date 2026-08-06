@@ -14,7 +14,10 @@
 // ════════════════════════════════════════════════════════════════════════
 
 const API_BASE_URL = window.API_BASE_URL || `http://${window.location.hostname}:3000`;
-const API_URL = `${API_BASE_URL}/reservation/api`;
+// window.APP_BASE_PATH comes from config.js (server.basePath — see brand.js),
+// which loads before this file on every page. Falls back to "/reservation"
+// so a stale cached config.js degrades rather than breaking (finding C2).
+const API_URL = `${API_BASE_URL}${window.APP_BASE_PATH || '/reservation'}/api`;
 
 const SESSION_KEY = 'drv_session_driver';
 let currentDriver = null; // { id, name, username }

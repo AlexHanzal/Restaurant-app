@@ -43,10 +43,14 @@
 }
 
 /* ── Self-hosted Inter (variable) ─────────────────────────────────────── */
+/* Relative, not "/reservation/fonts/...": this file is served from
+   ${BASE}/css/design.css (finding C2), so a path relative to that resolves
+   correctly under any configured server.basePath — a hardcoded absolute
+   /reservation/ path would 404 the font under a custom base. */
 @font-face {
   font-family: "Inter";
-  src: url("/reservation/fonts/InterVariable.woff2") format("woff2-variations"),
-       url("/reservation/fonts/InterVariable.woff2") format("woff2");
+  src: url("../fonts/InterVariable.woff2") format("woff2-variations"),
+       url("../fonts/InterVariable.woff2") format("woff2");
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
