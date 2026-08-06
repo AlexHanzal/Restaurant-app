@@ -136,7 +136,10 @@ const SERVER_CONFIG = {
     //   openssl pkcs12 -in pokladni.p12 -clcerts -nokeys -out secrets/eet-cert.pem
     //   openssl pkcs12 -in pokladni.p12 -nocerts -nodes  -out secrets/eet-key.pem
     eet: {
-        enabled: process.env.EET_ENABLED === "true",
+        // The config file's feature switch is a hard override: a restaurant
+        // that did not buy EET must not report sales even if a stray
+        // EET_ENABLED=true is left in its .env.
+        enabled: brand.isEnabled("eet") && process.env.EET_ENABLED === "true",
         playground: process.env.EET_PLAYGROUND !== "false", // safe default
         eic: process.env.EET_EIC || process.env.BUSINESS_DIC || "",
         idJednotky: process.env.EET_ID_JEDNOTKY || "",
@@ -213,6 +216,22 @@ const {
     verifyToken,
     COOKIE_NAME: AUTH_COOKIE_NAME,
 } = require("./auth");
+
+// Feature gate. Passes when AT LEAST ONE of the named features is on — the
+// kitchen board needs that, since GET /kitchen/orders serves table orders
+// and delivery orders alike and must survive `pos: false`.
+//
+// 404, deliberately, not 403: a feature this installation did not buy
+// should not announce that it exists. Always mount this FIRST in a route's
+// middleware chain — before csrf.requireCsrf and before any auth
+// middleware — so a disabled route can't leak a 401/403 that confirms it
+// exists.
+function requireFeature(...names) {
+    return (req, res, next) => {
+        if (names.some(name => brand.isEnabled(name))) return next();
+        res.status(404).json({ error: "Nenalezeno" });
+    };
+}
 
 // Credentials are loaded once, lazily, and cached — reading and parsing PEM on
 // every sale would be pointless I/O on the payment hot path. Returns null when
@@ -2764,13 +2783,24 @@ function setupMiddleware() {
         // (non-.js/.css, *.min.js, missing file, esbuild error).
         app.use(base, minify.createMinifyMiddleware(frontendPath));
         app.use(base, express.static(frontendPath, staticOptions));
-        app.get(`${base}/app`, indexHtmlRoute);
+        // Conditional page registration: a feature this installation did not
+        // buy gets no route at all, so a visit to its page falls through to
+        // the app's normal 404 handling instead of serving a page whose
+        // underlying API calls all 404. inner.html/admin are ALWAYS
+        // registered — that page doubles as the admin panel (menu, users,
+        // settings), and `pos: false` must only hide its POS-specific tabs,
+        // never the whole page (see src/js/inner.js's data-feature loop).
+        if (brand.isEnabled("reservations")) app.get(`${base}/app`, indexHtmlRoute);
         app.get(`${base}/inner.html`, innerHtmlRoute);
         app.get(`${base}/admin`, innerHtmlRoute);
-        app.get(`${base}/delivery`, deliveryHtmlRoute);
-        app.get(`${base}/stul/:token`, tableHtmlRoute);
-        app.get(`${base}/driver`, driverHtmlRoute);
-        app.get(`${base}/kitchen`, kitchenHtmlRoute);
+        if (brand.isEnabled("delivery")) {
+            app.get(`${base}/delivery`, deliveryHtmlRoute);
+            app.get(`${base}/driver`, driverHtmlRoute);
+        }
+        if (brand.isEnabled("tableOrdering")) app.get(`${base}/stul/:token`, tableHtmlRoute);
+        if (brand.isEnabled("pos") || brand.isEnabled("delivery") || brand.isEnabled("tableOrdering")) {
+            app.get(`${base}/kitchen`, kitchenHtmlRoute);
+        }
         for (const [route, handler] of Object.entries(legalPageRoutesByPath)) {
             app.get(`${base}${route}`, handler);
         }
@@ -2783,13 +2813,19 @@ function setupMiddleware() {
         app.get(`/manifest.json`, manifestRoute);
         app.use(minify.createMinifyMiddleware(frontendPath));
         app.use(express.static(frontendPath, staticOptions));
-        app.get("/app", indexHtmlRoute);
+        // Same conditional registration as the base-path branch above — see
+        // its comment for why inner.html/admin are unconditional.
+        if (brand.isEnabled("reservations")) app.get("/app", indexHtmlRoute);
         app.get("/inner.html", innerHtmlRoute);
         app.get("/admin", innerHtmlRoute);
-        app.get("/delivery", deliveryHtmlRoute);
-        app.get("/stul/:token", tableHtmlRoute);
-        app.get("/driver", driverHtmlRoute);
-        app.get("/kitchen", kitchenHtmlRoute);
+        if (brand.isEnabled("delivery")) {
+            app.get("/delivery", deliveryHtmlRoute);
+            app.get("/driver", driverHtmlRoute);
+        }
+        if (brand.isEnabled("tableOrdering")) app.get("/stul/:token", tableHtmlRoute);
+        if (brand.isEnabled("pos") || brand.isEnabled("delivery") || brand.isEnabled("tableOrdering")) {
+            app.get("/kitchen", kitchenHtmlRoute);
+        }
         for (const [route, handler] of Object.entries(legalPageRoutesByPath)) {
             app.get(route, handler);
         }
@@ -3406,7 +3442,7 @@ function setupAPIRoutes() {
     // SMS budget, so this route can't be used to farm extra verification
     // codes, or to top up an SMS-bombing run against one phone number that
     // the reservation flow's own limiter would otherwise have capped.
-    app.post(`${api}/reorder/send-code`, security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.reorderSendCodeSchema), async (req, res) => {
+    app.post(`${api}/reorder/send-code`, requireFeature("delivery"), security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.reorderSendCodeSchema), async (req, res) => {
         const { phone } = req.body || {};
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return res.status(400).json({ error: "Zadejte telefonní číslo" });
@@ -3451,7 +3487,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/reorder/verify`, V.validate(V.reorderVerifySchema), (req, res) => {
+    app.post(`${api}/reorder/verify`, requireFeature("delivery"), V.validate(V.reorderVerifySchema), (req, res) => {
         const { phone, code } = req.body || {};
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return res.status(400).json({ error: "Chybí telefon nebo kód" });
@@ -3473,7 +3509,7 @@ function setupAPIRoutes() {
         res.json({ success: true });
     });
 
-    app.get(`${api}/reorder/recent`, (req, res) => {
+    app.get(`${api}/reorder/recent`, requireFeature("delivery"), (req, res) => {
         // No middleware (spec §7) — this route reads and verifies the cookie
         // itself, the same hand-rolled "optional auth" pattern
         // getAuthenticatedUserIfAny() below uses for the staff auth_token
@@ -3504,7 +3540,7 @@ function setupAPIRoutes() {
         res.json({ orders });
     });
 
-    app.post(`${api}/reorder/forget`, (req, res) => {
+    app.post(`${api}/reorder/forget`, requireFeature("delivery"), (req, res) => {
         // clearCookie needs the same attributes (minus maxAge) that were used
         // when setting the cookie, or some browsers won't actually remove it —
         // exactly the same reasoning as auth.clearSessionCookie() above.
@@ -3517,7 +3553,7 @@ function setupAPIRoutes() {
 
     const VALID_PAYMENT_METHODS = ["cash", "card_on_delivery", "online_card"];
 
-    app.post(`${api}/orders`, V.validate(V.createOrderSchema), async (req, res) => {
+    app.post(`${api}/orders`, requireFeature("delivery"), V.validate(V.createOrderSchema), async (req, res) => {
         const { customerName, address, psc, phone, items, note, paymentMethod, email } = req.body || {};
 
         const settings = settingsStore.getSettings();
@@ -3645,7 +3681,7 @@ function setupAPIRoutes() {
     // POST — driver/waiter marks a cash/card-on-delivery order as paid at handoff.
     // (Online-card orders get marked paid via the gateway webhook instead —
     // see /payments/gopay/webhook below, not this route.)
-    app.post(`${api}/orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), async (req, res) => {
+    app.post(`${api}/orders/:id/mark-paid`, requireFeature("delivery"), csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), async (req, res) => {
         const order = db.get(COL.orders, req.params.id);
         if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
         if (order.paymentMethod === "online_card") {
@@ -3762,7 +3798,7 @@ function setupAPIRoutes() {
     });
 
     // GET — full order list, including customer name/address/phone. Staff-only.
-    app.get(`${api}/orders`, requireAuth, (req, res) => {
+    app.get(`${api}/orders`, requireFeature("delivery"), requireAuth, (req, res) => {
         try {
             const orders = db.list(COL.orders);
             orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -3772,7 +3808,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/orders/:id/claim`, csrf.requireCsrf, requireDriver, V.validateParams(V.paramsId), V.validate(V.claimOrderSchema), (req, res) => {
+    app.post(`${api}/orders/:id/claim`, requireFeature("delivery"), csrf.requireCsrf, requireDriver, V.validateParams(V.paramsId), V.validate(V.claimOrderSchema), (req, res) => {
         const { driverId, driverName } = req.body || {};
 
         const order = db.get(COL.orders, req.params.id);
@@ -3803,7 +3839,7 @@ function setupAPIRoutes() {
         res.json({ success: true, order });
     });
 
-    app.post(`${api}/orders/:id/kitchen-status`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), V.validate(V.kitchenStatusSchema), (req, res) => {
+    app.post(`${api}/orders/:id/kitchen-status`, requireFeature("delivery"), csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), V.validate(V.kitchenStatusSchema), (req, res) => {
         const { status } = req.body || {};
 
         const order = db.get(COL.orders, req.params.id);
@@ -3819,7 +3855,7 @@ function setupAPIRoutes() {
     // deleting orders is not part of a driver's job. See requireStaff's
     // comment in auth.js for why this is not requireAdmin (the kitchen page's
     // delete button is used by non-admin staff).
-    app.delete(`${api}/orders/:id`, csrf.requireCsrf, requireStaff, V.validateParams(V.paramsId), (req, res) => {
+    app.delete(`${api}/orders/:id`, requireFeature("delivery"), csrf.requireCsrf, requireStaff, V.validateParams(V.paramsId), (req, res) => {
         const ok = db.remove(COL.orders, req.params.id);
         if (!ok) return res.status(404).json({ error: "Objednávka nenalezena" });
         broadcastBoardEvent();
@@ -3831,7 +3867,7 @@ function setupAPIRoutes() {
     // never called), so this route moves no money and touches no gateway. The
     // paymentStatus guard is what enforces that.
     app.post(`${api}/orders/:orderId/refund-reason`,
-        csrf.requireCsrf, requireAuth,
+        requireFeature("delivery"), csrf.requireCsrf, requireAuth,
         V.validateParams(V.paramsOrderId), V.validate(V.refundReasonSchema),
         (req, res) => {
             const order = db.get(COL.orders, req.params.orderId);
@@ -3854,7 +3890,7 @@ function setupAPIRoutes() {
     // intended flow, it just closes the unauthenticated read that used to
     // exist alongside it.
 
-    app.get(`${api}/kitchen/orders`, requireAuth, (req, res) => {
+    app.get(`${api}/kitchen/orders`, requireFeature("pos", "delivery", "tableOrdering"), requireAuth, (req, res) => {
         try {
             const indoor = [];
 
@@ -3911,7 +3947,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/kitchen/indoor/status`, csrf.requireCsrf, requireAuth, V.validate(V.kitchenIndoorStatusSchema), (req, res) => {
+    app.post(`${api}/kitchen/indoor/status`, requireFeature("pos", "delivery", "tableOrdering"), csrf.requireCsrf, requireAuth, V.validate(V.kitchenIndoorStatusSchema), (req, res) => {
         const { fileId, dateStr, dayIndex, startHour, endHour, status } = req.body || {};
         // SECURITY: dayIndex/startHour/endHour are bounded (0–6 / 0–23 / 0–23)
         // by V.kitchenIndoorStatusSchema before this runs — the loop below
@@ -3935,7 +3971,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/kitchen/indoor/remove`, csrf.requireCsrf, requireAuth, V.validate(V.kitchenIndoorRemoveSchema), (req, res) => {
+    app.post(`${api}/kitchen/indoor/remove`, requireFeature("pos", "delivery", "tableOrdering"), csrf.requireCsrf, requireAuth, V.validate(V.kitchenIndoorRemoveSchema), (req, res) => {
         const { fileId, dateStr, dayIndex, startHour, endHour } = req.body || {};
         try {
             const data = db.get(COL.timetables, fileId);
@@ -3962,7 +3998,7 @@ function setupAPIRoutes() {
     // POST — waiter marks a reservation-attached order as paid. Same
     // fileId/dateStr/dayIndex/startHour/endHour addressing as kitchen/indoor/status,
     // so it marks every hour slot the booking occupies at once.
-    app.post(`${api}/kitchen/reservation/mark-paid`, csrf.requireCsrf, requireAuth, V.validate(V.kitchenReservationMarkPaidSchema), async (req, res) => {
+    app.post(`${api}/kitchen/reservation/mark-paid`, requireFeature("pos", "delivery", "tableOrdering"), csrf.requireCsrf, requireAuth, V.validate(V.kitchenReservationMarkPaidSchema), async (req, res) => {
         const { fileId, dateStr, dayIndex, startHour, endHour } = req.body || {};
         try {
             const data = db.get(COL.timetables, fileId);
@@ -4007,7 +4043,7 @@ function setupAPIRoutes() {
     // against the menu back when the reservation was booked (see
     // priceOrderItems() in /reservations/send-code) — not re-derived from
     // anything in this request.
-    app.post(`${api}/kitchen/reservation/pay-online`, V.validate(V.kitchenReservationPayOnlineSchema), async (req, res) => {
+    app.post(`${api}/kitchen/reservation/pay-online`, requireFeature("pos", "delivery", "tableOrdering"), V.validate(V.kitchenReservationPayOnlineSchema), async (req, res) => {
         const { fileId, dateStr, dayIndex, startHour, endHour, returnUrl } = req.body || {};
         try {
             const data = db.get(COL.timetables, fileId);
@@ -4051,7 +4087,7 @@ function setupAPIRoutes() {
     // validated when it actually ran.
     const indoorIdempotency = idempotency.middleware({ db, col: COL.idempotency });
 
-    app.post(`${api}/indoor-orders`, csrf.requireCsrf, requireAuth, indoorIdempotency, V.validate(V.createIndoorOrderSchema), (req, res) => {
+    app.post(`${api}/indoor-orders`, requireFeature("pos"), csrf.requireCsrf, requireAuth, indoorIdempotency, V.validate(V.createIndoorOrderSchema), (req, res) => {
         const { tableName, guestName, items, offlineSale } = req.body || {};
 
         // Server-side pricing — same rule as delivery orders: client sends
@@ -4140,7 +4176,7 @@ function setupAPIRoutes() {
     // Idempotency-Key guard below is belt-and-braces plus a stable stored
     // response body — the route that genuinely needed it is the creation
     // one above. See idempotency.js's header.
-    app.post(`${api}/indoor-orders/:id/mark-paid`, csrf.requireCsrf, requireAuth, indoorIdempotency, V.validateParams(V.paramsId), V.validate(V.markPaidSchema), async (req, res) => {
+    app.post(`${api}/indoor-orders/:id/mark-paid`, requireFeature("pos"), csrf.requireCsrf, requireAuth, indoorIdempotency, V.validateParams(V.paramsId), V.validate(V.markPaidSchema), async (req, res) => {
         const order = db.get(COL.indoorOrders, req.params.id);
         if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
 
@@ -4175,7 +4211,7 @@ function setupAPIRoutes() {
     // scans a QR code at the table and pays from their phone). No auth
     // required — guests, not just staff, can trigger this — but the order
     // must exist and not already be paid.
-    app.post(`${api}/indoor-orders/:id/pay-online`, V.validateParams(V.paramsId), V.validate(V.payOnlineReturnUrlSchema), async (req, res) => {
+    app.post(`${api}/indoor-orders/:id/pay-online`, requireFeature("pos", "tableOrdering"), V.validateParams(V.paramsId), V.validate(V.payOnlineReturnUrlSchema), async (req, res) => {
         const order = db.get(COL.indoorOrders, req.params.id);
         if (!order) return res.status(404).json({ error: "Objednávka nenalezena" });
         if (order.paymentStatus === "paid") return res.status(400).json({ error: "Objednávka je již zaplacena" });
@@ -4224,7 +4260,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.get(`${api}/indoor-orders`, requireAuth, (req, res) => {
+    app.get(`${api}/indoor-orders`, requireFeature("pos"), requireAuth, (req, res) => {
         try {
             const orders = db.list(COL.indoorOrders);
             orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -4234,7 +4270,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/indoor-orders/:id/kitchen-status`, csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), V.validate(V.kitchenStatusSchema), (req, res) => {
+    app.post(`${api}/indoor-orders/:id/kitchen-status`, requireFeature("pos", "tableOrdering"), csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), V.validate(V.kitchenStatusSchema), (req, res) => {
         const { status } = req.body || {};
 
         const order = db.get(COL.indoorOrders, req.params.id);
@@ -4248,7 +4284,7 @@ function setupAPIRoutes() {
 
     // SECURITY (audit 2026-07-29, finding F2): same reasoning as
     // DELETE /orders/:id above — drivers have no business deleting table orders.
-    app.delete(`${api}/indoor-orders/:id`, csrf.requireCsrf, requireStaff, V.validateParams(V.paramsId), (req, res) => {
+    app.delete(`${api}/indoor-orders/:id`, requireFeature("pos", "tableOrdering"), csrf.requireCsrf, requireStaff, V.validateParams(V.paramsId), (req, res) => {
         const ok = db.remove(COL.indoorOrders, req.params.id);
         if (!ok) return res.status(404).json({ error: "Objednávka nenalezena" });
         broadcastBoardEvent();
@@ -4299,6 +4335,7 @@ function setupAPIRoutes() {
     // working) plus whether ordering is open right now.
     app.get(
         `${api}/table-session/:token`,
+        requireFeature("tableOrdering"),
         security.tableOrderIpLimiter,
         V.validateParams(V.paramsTableToken),
         resolveTableToken("params"),
@@ -4322,6 +4359,7 @@ function setupAPIRoutes() {
     // waiter-placed row is source:"qr".
     app.post(
         `${api}/table-orders`,
+        requireFeature("tableOrdering"),
         security.tableOrderIpLimiter,
         V.validate(V.tableOrderSchema),
         resolveTableToken("body"),
@@ -4420,6 +4458,7 @@ function setupAPIRoutes() {
     // loop exhausted the whole venue's shared NAT budget in ~7 minutes.
     app.get(
         `${api}/table-orders/:id/status`,
+        requireFeature("tableOrdering"),
         security.tableOrderIpLimiter,
         V.validateParams(V.paramsId),
         resolveTableToken("query"),
@@ -4447,7 +4486,7 @@ function setupAPIRoutes() {
     // ~2809) is PUBLIC — renderer.js depends on that — so attaching tokens
     // to its payload would publish every table's ordering capability to the
     // internet and defeat the signature entirely.
-    app.get(`${api}/table-qr-tokens`, requireAuth, (req, res) => {
+    app.get(`${api}/table-qr-tokens`, requireFeature("tableOrdering"), requireAuth, (req, res) => {
         try {
             const origin = `${req.protocol}://${req.get("host")}`;
             const rows = db.list(COL.timetables)
@@ -4471,7 +4510,7 @@ function setupAPIRoutes() {
 
     // ── DRIVERS ──────────────────────────────────────────────────────────
 
-    app.get(`${api}/drivers`, requireAuth, (req, res) => {
+    app.get(`${api}/drivers`, requireFeature("delivery"), requireAuth, (req, res) => {
         try {
             const drivers = db.list(COL.drivers).map(({ password, ...safe }) => safe);
             res.json(drivers);
@@ -4480,7 +4519,7 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/drivers`, csrf.requireCsrf, requireAdmin, V.validate(V.createDriverSchema), async (req, res) => {
+    app.post(`${api}/drivers`, requireFeature("delivery"), csrf.requireCsrf, requireAdmin, V.validate(V.createDriverSchema), async (req, res) => {
         const { name, username, password } = req.body || {};
 
         const id = generateFileId();
@@ -4508,7 +4547,7 @@ function setupAPIRoutes() {
     //     used to tell "no such driver" from "wrong password"
     //   - every attempt (success or failure) is written to the login_audit
     //     collection — see GET /api/security/login-audit below
-    app.post(`${api}/drivers/login`, security.loginLimiter, V.validate(V.driverLoginSchema), async (req, res) => {
+    app.post(`${api}/drivers/login`, requireFeature("delivery"), security.loginLimiter, V.validate(V.driverLoginSchema), async (req, res) => {
         const { username, password } = req.body || {};
 
         const ip = req.ip;
@@ -4644,7 +4683,7 @@ function setupAPIRoutes() {
         return (user && user.isAdmin) ? user : null;
     }
 
-    app.get(`${api}/daily-menu`, (req, res) => {
+    app.get(`${api}/daily-menu`, requireFeature("dailyMenu"), (req, res) => {
         try {
             const requestedDate = typeof req.query.date === "string" ? req.query.date.trim() : "";
 
@@ -4687,7 +4726,7 @@ function setupAPIRoutes() {
     // Items without a client-sent id (a brand-new row from the admin's "+
     // Přidat položku" button) get one generated here — stable within this
     // record from then on (spec §5: "IDs ... stable within the record").
-    app.put(`${api}/daily-menu`, csrf.requireCsrf, requireAdmin, V.validate(V.dailyMenuPutSchema), (req, res) => {
+    app.put(`${api}/daily-menu`, requireFeature("dailyMenu"), csrf.requireCsrf, requireAdmin, V.validate(V.dailyMenuPutSchema), (req, res) => {
         try {
             const { date, items } = req.body;
             const withIds = items.map(item => ({
@@ -4831,7 +4870,7 @@ function setupAPIRoutes() {
     // public: pending/confirmed/failed counts plus the oldest unreported
     // sale are revenue-shaped information (same reasoning as GET
     // /stats/sales above), not something to hand an anonymous caller.
-    app.get(`${api}/eet/health`, requireAuth, (req, res) => {
+    app.get(`${api}/eet/health`, requireFeature("eet"), requireAuth, (req, res) => {
         res.json({
             enabled: SERVER_CONFIG.eet.enabled,
             mode: SERVER_CONFIG.eet.playground ? "playground" : "production",

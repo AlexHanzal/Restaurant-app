@@ -291,6 +291,20 @@ function applySessionToUI() {
     document.getElementById('logoutBtn').style.display = currentUser ? 'inline-flex' : 'none';
 }
 
+// Hide anything belonging to a feature this installation did not buy.
+// window.APP_FEATURES is set by the server-rendered config.js (see
+// src/server/brand.js). Cosmetic only — the server 404s the matching
+// routes regardless, so a hidden tab is not the security boundary. Unlike
+// the .admin-only loop above, this runs once at load rather than on every
+// session change — feature flags are fixed for the life of the page, they
+// don't depend on who's logged in.
+document.querySelectorAll('[data-feature]').forEach(el => {
+    const feature = el.getAttribute('data-feature');
+    if (!(window.APP_FEATURES && window.APP_FEATURES[feature])) {
+        el.style.display = 'none';
+    }
+});
+
 function showLoginGate() {
     document.getElementById('loginGateOverlay').style.display = 'flex';
     document.getElementById('loginAbbrInput').value = '';

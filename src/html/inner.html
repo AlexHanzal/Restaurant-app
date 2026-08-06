@@ -83,10 +83,10 @@
              the main content. Same ids/behavior as before, just vertical. -->
         <nav class="inn-nav-tabs">
             <button class="inn-nav-tab active" id="viewOverviewBtn"><span class="icon" data-glyph="overview" aria-hidden="true"></span><span>Přehled</span></button>
-            <button class="inn-nav-tab" id="viewDetailBtn" disabled><span class="icon" data-glyph="detail" aria-hidden="true"></span><span>Detail stolu</span></button>
-            <button class="inn-nav-tab" id="viewWaiterBtn"><span class="icon" data-glyph="waiter" aria-hidden="true"></span><span>Objednat ke stolu</span></button>
+            <button class="inn-nav-tab" id="viewDetailBtn" data-feature="pos" disabled><span class="icon" data-glyph="detail" aria-hidden="true"></span><span>Detail stolu</span></button>
+            <button class="inn-nav-tab" id="viewWaiterBtn" data-feature="pos"><span class="icon" data-glyph="waiter" aria-hidden="true"></span><span>Objednat ke stolu</span></button>
             <button class="inn-nav-tab" id="viewMenuBtn"><span class="icon" data-glyph="menu" aria-hidden="true"></span><span>Menu</span></button>
-            <button class="inn-nav-tab" id="viewSalesBtn"><span class="icon" data-glyph="sales" aria-hidden="true"></span><span>Prodeje</span></button>
+            <button class="inn-nav-tab" id="viewSalesBtn" data-feature="pos"><span class="icon" data-glyph="sales" aria-hidden="true"></span><span>Prodeje</span></button>
             <button class="inn-nav-tab admin-only" id="viewUsersBtn" style="display:none;"><span class="icon" data-glyph="users" aria-hidden="true"></span><span>Uživatelé</span></button>
             <button class="inn-nav-tab admin-only" id="viewSettingsBtn" style="display:none;"><span class="icon" data-glyph="settings" aria-hidden="true"></span><span>Nastavení</span></button>
             <!-- Floorplan (docs/superpowers/specs/2026-07-27-floorplan-table-
@@ -101,7 +101,7 @@
             <!-- go-live Task 3 (spec §5): daily specials quick-entry panel.
                  Admin-only, same pattern as Uživatelé/Nastavení above — PUT
                  /api/daily-menu requires requireAdmin server-side anyway. -->
-            <button class="inn-nav-tab admin-only" id="viewDailyMenuBtn" style="display:none;"><span class="icon" data-glyph="daily" aria-hidden="true"></span><span>Polední menu</span></button>
+            <button class="inn-nav-tab admin-only" id="viewDailyMenuBtn" data-feature="dailyMenu" style="display:none;"><span class="icon" data-glyph="daily" aria-hidden="true"></span><span>Polední menu</span></button>
         </nav>
 
         <div class="inn-sidebar-lower">
