@@ -150,6 +150,8 @@ const BAD = [
     ["defaults.delivery.pscWhitelist", `module.exports = { defaults: { delivery: { pscWhitelist: [12000] } } };`],
     ["defaults.delivery.fee", `module.exports = { defaults: { delivery: { fee: -1 } } };`],
     ["defaults.delivery.etaMinutes", `module.exports = { defaults: { delivery: { etaMinutes: 1.5 } } };`],
+    ["defaults.dailyMenu.from", `module.exports = { defaults: { dailyMenu: { from: "11h00" } } };`],
+    ["defaults.dailyMenu.to", `module.exports = { defaults: { dailyMenu: { to: "25:00" } } };`],
 ];
 
 for (const [field, source] of BAD) {
@@ -172,6 +174,12 @@ test("accepts an empty dic and an empty termsEffectiveDate", () => {
 test("accepts a 3-digit hex accent", () => {
     const brand = loadBrand(`module.exports = { brand: { accent: "#0a0" } };`);
     assert.strictEqual(brand.config.brand.accent, "#0a0");
+});
+
+test("accepts a valid HH:MM dailyMenu window", () => {
+    const brand = loadBrand(`module.exports = { defaults: { dailyMenu: { from: "11:00", to: "14:30" } } };`);
+    assert.strictEqual(brand.config.defaults.dailyMenu.from, "11:00");
+    assert.strictEqual(brand.config.defaults.dailyMenu.to, "14:30");
 });
 
 test("a config file that throws on require is reported with its path", () => {

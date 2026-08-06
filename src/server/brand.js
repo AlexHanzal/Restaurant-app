@@ -167,6 +167,7 @@ const ICO_RE = /^\d{8}$/;
 const DIC_RE = /^CZ\d{8,10}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PSC_RE = /^\d{5}$/;
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function fail(field, expectation, got) {
     throw new Error(
@@ -248,6 +249,14 @@ requireWholeNonNegative("defaults.delivery.freeAbove", dd.freeAbove);
 requireWholeNonNegative("defaults.delivery.etaMinutes", dd.etaMinutes);
 if (!Array.isArray(dd.pscWhitelist) || dd.pscWhitelist.some(p => typeof p !== "string" || !PSC_RE.test(p))) {
     fail("defaults.delivery.pscWhitelist", "očekává pole PSČ jako řetězců o 5 číslicích", dd.pscWhitelist);
+}
+
+const dm = config.defaults.dailyMenu;
+if (typeof dm.from !== "string" || !TIME_RE.test(dm.from)) {
+    fail("defaults.dailyMenu.from", "očekává čas ve tvaru HH:MM (00:00–23:59)", dm.from);
+}
+if (typeof dm.to !== "string" || !TIME_RE.test(dm.to)) {
+    fail("defaults.dailyMenu.to", "očekává čas ve tvaru HH:MM (00:00–23:59)", dm.to);
 }
 
 // ── FREEZE ───────────────────────────────────────────────────────────────

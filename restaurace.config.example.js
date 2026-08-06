@@ -118,11 +118,23 @@ module.exports = {
 // CO TENHLE SOUBOR UDĚLAT NEMŮŽE — projdi po nasazení ručně
 // ============================================================================
 //
-//   1. Vytvořit přihlášení pro majitele:  node deploy/create-admin.js
+//   1. Vytvořit přihlášení pro majitele: v tomhle repozitáři NENÍ žádný
+//      hotový skript, který by to udělal za tebe. Postup je v README.md,
+//      sekci „The first admin account": buď obnov databázi, která už účet
+//      obsahuje, nebo vlož záznam do kolekce `users` ručně s bcrypt hashem
+//      hesla (README má přesný tvar záznamu i příklad, kde ho v kódu najít).
 //   2. Naimportovat jídelní lístek:       panel → Menu
 //   3. Nakreslit rozložení stolů:         panel → Rozložení
-//   4. Převést EET certifikát .p12 → PEM: viz PRED-NAHRANIM.md
-//   5. Vytisknout QR kódy ke stolům:      panel → (jen když tableOrdering: true)
-//   6. Projít go-live kontrolu:           PRED-NAHRANIM.md
+//   4. Převést EET certifikát .p12 → PEM: PRED-NAHRANIM.md, sekce „EET 2.0
+//      před spuštěním" (úplně na konci souboru), první bod.
+//   5. Vytisknout QR kódy ke stolům (jen když je v Nastavení zapnuté
+//      "Povolit objednávky u stolu", tj. features.tableOrdering: true výš):
+//      panel → Rozložení → tlačítko "Tisknout QR kódy všech stolů".
+//   6. Projít zbytek EET kontrolního seznamu před ostrým spuštěním (ID
+//      jednotky, přepnutí z playground na ostré prostředí, testovací
+//      tržba, text účtenky, sledování logů): tamtéž, celá sekce „EET 2.0
+//      před spuštěním" — zbytek PRED-NAHRANIM.md se týká jednorázové
+//      přípravy původního repozitáře pro nahrání na GitHub, ne nasazení
+//      u zákazníka, a s tímhle krokem nesouvisí.
 //
 // ============================================================================
