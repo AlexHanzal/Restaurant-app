@@ -21,9 +21,15 @@
 // See timezone.js's header for the full list of what that silently breaks.
 const { TIMEZONE } = require("./timezone");
 
+// Per-restaurant config file (docs/superpowers/specs/
+// 2026-08-06-restaurant-config-file-design.md). Absent file = the values
+// that used to be hardcoded right here, so this require changes nothing for
+// an installation that has no restaurace.config.js.
+const brand = require("./brand");
+
 const SERVER_CONFIG = {
     port: process.env.PORT || 3000,
-    basePath: "/reservation",
+    basePath: brand.config.server.basePath,
     appName: "Restaurant System",
     apiVersion: "1.0",
     // SECURITY (3rd hardening pass): the old `corsOrigins: "all"` flag that
@@ -105,12 +111,18 @@ const SERVER_CONFIG = {
     // values in production. BUSINESS_VAT_PAYER defaults to "false" — until
     // this business is VAT-registered, receipts must say "Nejsme plátci
     // DPH" and never show a VAT breakdown (see docs/CZ-PAYMENTS-SETUP.md).
+    // The literals that used to sit here now live in brand.js's
+    // BRAND_DEFAULTS, so an installation with a restaurace.config.js sets
+    // them there. BUSINESS_* env vars still win when present — existing
+    // deploys that set them keep working unchanged.
     business: {
-        name: process.env.BUSINESS_NAME || "Ukázková restaurace s.r.o.",
-        ico: process.env.BUSINESS_ICO || "12345678",
-        dic: process.env.BUSINESS_DIC || "CZ12345678",
-        address: process.env.BUSINESS_ADDRESS || "Náměstí Svobody 1, 602 00 Brno",
-        vatPayer: process.env.BUSINESS_VAT_PAYER === "true", // default: NOT a VAT payer
+        name: process.env.BUSINESS_NAME || brand.config.business.name,
+        ico: process.env.BUSINESS_ICO || brand.config.business.ico,
+        dic: process.env.BUSINESS_DIC || brand.config.business.dic,
+        address: process.env.BUSINESS_ADDRESS || brand.config.business.address,
+        vatPayer: process.env.BUSINESS_VAT_PAYER
+            ? process.env.BUSINESS_VAT_PAYER === "true"
+            : brand.config.business.vatPayer,
     },
 
     // ── EET 2.0 (elektronická evidence tržeb) ────────────────────────────
@@ -2465,78 +2477,22 @@ function setupMiddleware() {
     const frontendPath = path.join(process.cwd(), SERVER_CONFIG.frontendPath);
     const base = SERVER_CONFIG.basePath;
 
-    const innerHtmlRoute = async (req, res) => {
-        const candidates = [
-            path.join(frontendPath, "inner.html"),
-            path.join(frontendPath, "html", "inner.html")
-        ];
-        for (const file of candidates) {
-            try { await fs.access(file); return res.sendFile(file); } catch {}
-        }
-        res.status(404).send("inner.html not found");
-    };
+    // ── PAGE TEMPLATES (go-live Task 5 §7, config Task 2) ────────────────
+    // Every page under src/html/ is a {{TOKEN}} template. Brand tokens
+    // (WORDMARK, BASE, BRAND_STYLE, …) resolve from brand.js; the legal
+    // pages additionally carry business-identity tokens (NAZEV/ICO/…)
+    // resolved from settings.business AT SERVE TIME (not baked in) —
+    // editing business details in admin Nastavení updates these pages
+    // immediately, no restart/rebuild. Only the template FILE READ is
+    // cached (htmlTemplateCache) — the source HTML never changes at
+    // runtime, so re-reading it from disk on every request would be
+    // pointless I/O — but the RENDERED output is never cached, since
+    // settings.business (and hence the placeholder values) can change at
+    // any time via PUT /api/settings.
+    const htmlTemplateCache = new Map(); // filename -> raw template string
 
-    const deliveryHtmlRoute = async (req, res) => {
-        const candidates = [
-            path.join(frontendPath, "delivery.html"),
-            path.join(frontendPath, "html", "delivery.html")
-        ];
-        for (const file of candidates) {
-            try { await fs.access(file); return res.sendFile(file); } catch {}
-        }
-        res.status(404).send("delivery.html not found");
-    };
-
-    // The guest QR self-order page. Serves the shell unconditionally —
-    // token validation happens in GET /api/table-session/:token, not here,
-    // so the HTML stays cacheable and every rejection lives in one place.
-    const tableHtmlRoute = async (req, res) => {
-        const candidates = [
-            path.join(frontendPath, "table.html"),
-            path.join(frontendPath, "html", "table.html")
-        ];
-        for (const file of candidates) {
-            try { await fs.access(file); return res.sendFile(file); } catch {}
-        }
-        res.status(404).send("table.html not found");
-    };
-
-    const driverHtmlRoute = async (req, res) => {
-        const candidates = [
-            path.join(frontendPath, "driver.html"),
-            path.join(frontendPath, "html", "driver.html")
-        ];
-        for (const file of candidates) {
-            try { await fs.access(file); return res.sendFile(file); } catch {}
-        }
-        res.status(404).send("driver.html not found");
-    };
-
-    const kitchenHtmlRoute = async (req, res) => {
-        const candidates = [
-            path.join(frontendPath, "kitchen.html"),
-            path.join(frontendPath, "html", "kitchen.html")
-        ];
-        for (const file of candidates) {
-            try { await fs.access(file); return res.sendFile(file); } catch {}
-        }
-        res.status(404).send("kitchen.html not found");
-    };
-
-    // ── LEGAL PAGES (go-live Task 5, spec §7) ────────────────────────────
-    // Three static Czech template pages with {{TOKEN}} placeholders resolved
-    // from settings.business AT SERVE TIME (not baked in) — editing business
-    // details in admin Nastavení updates these pages immediately, no
-    // restart/rebuild. Only the template FILE READ is cached
-    // (legalTemplateCache) — the source HTML never changes at runtime, so
-    // re-reading it from disk on every request would be pointless I/O — but
-    // the RENDERED output is never cached, since settings.business (and
-    // hence the placeholder values) can change at any time via
-    // PUT /api/settings.
-    const legalTemplateCache = new Map(); // filename -> raw template string
-
-    async function loadLegalTemplate(filename) {
-        if (legalTemplateCache.has(filename)) return legalTemplateCache.get(filename);
+    async function loadHtmlTemplate(filename) {
+        if (htmlTemplateCache.has(filename)) return htmlTemplateCache.get(filename);
         const candidates = [
             path.join(frontendPath, filename),
             path.join(frontendPath, "html", filename),
@@ -2544,31 +2500,33 @@ function setupMiddleware() {
         for (const file of candidates) {
             try {
                 const raw = await fs.readFile(file, "utf8");
-                legalTemplateCache.set(filename, raw);
+                htmlTemplateCache.set(filename, raw);
                 return raw;
             } catch {}
         }
         return null;
     }
 
-    // Token names match the identity block already written into the
-    // templates (Czech field names — NAZEV/ADRESA/TELEFON — rather than the
-    // English settings.business.{name,address,phone} keys) since that's what
-    // reads naturally inline in Czech legal prose. EFFECTIVE_DATE is the one
-    // non-identity token: resolved from the optional
-    // settings.business.termsEffectiveDate field when the owner has set one
-    // (e.g. once a lawyer has actually reviewed and dated the text), else
-    // today's date — so the page never shows a blank/unset placeholder. Any
-    // {{TOKEN}} with no matching entry here is left untouched rather than
-    // blanked: that can only happen from a typo in the template itself, and
-    // leaving it visible makes such a bug obvious instead of silently hiding
-    // it (still never a literal, USER-facing "{{...}}" for any of the three
-    // real templates, which only ever use the tokens listed below).
-    function renderLegalTemplate(rawHtml, business) {
-        const biz = business || {};
+    // One renderer for every page. Brand tokens (WORDMARK, BASE,
+    // BRAND_STYLE, …) come from brand.js and are fixed for the process
+    // lifetime; the business tokens below (Czech field names —
+    // NAZEV/ADRESA/TELEFON — matching the legal templates' prose, rather
+    // than the English settings.business.{name,address,phone} keys) are
+    // read from settings PER REQUEST, because the owner can change them in
+    // admin Nastavení and the legal pages must reflect that immediately
+    // with no restart. That's why the rendered output is never cached —
+    // only the raw file read is. EFFECTIVE_DATE is the one non-identity
+    // token: resolved from the optional settings.business.termsEffectiveDate
+    // field when the owner has set one (e.g. once a lawyer has actually
+    // reviewed and dated the text), else today's date — so the page never
+    // shows a blank/unset placeholder. brand.renderTokens() leaves any
+    // unknown {{TOKEN}} untouched rather than blanked, so a typo in a
+    // template is visible instead of silently hidden.
+    function renderPage(rawHtml, extraTokens) {
+        const biz = settingsStore.getSettings().business || {};
         const effectiveDate = (biz.termsEffectiveDate && String(biz.termsEffectiveDate).trim())
             || new Date().toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric", year: "numeric" });
-        const tokens = {
+        return brand.renderTokens(rawHtml, {
             NAZEV: biz.name || "",
             ICO: biz.ico || "",
             DIC: biz.dic || "",
@@ -2576,42 +2534,43 @@ function setupMiddleware() {
             EMAIL: biz.email || "",
             TELEFON: biz.phone || "",
             EFFECTIVE_DATE: effectiveDate,
-        };
-        return rawHtml.replace(/\{\{(\w+)\}\}/g, (match, key) =>
-            Object.prototype.hasOwnProperty.call(tokens, key) ? escapeHtml(tokens[key]) : match
-        );
+            ...(extraTokens || {}),
+        });
     }
 
-    function makeLegalPageRoute(filename) {
+    function makePageRoute(filename, extraTokens) {
         return async (req, res) => {
-            const raw = await loadLegalTemplate(filename);
-            if (raw == null) return res.status(404).send("Stránka nenalezena");
-            const settings = settingsStore.getSettings();
+            const rawHtml = await loadHtmlTemplate(filename);
+            if (rawHtml == null) return res.status(404).send("Stránka nenalezena");
             res.set("Content-Type", "text/html; charset=utf-8");
-            res.send(renderLegalTemplate(raw, settings.business));
+            res.send(renderPage(rawHtml, extraTokens));
         };
     }
+
+    const innerHtmlRoute = makePageRoute("inner.html");
+    const deliveryHtmlRoute = makePageRoute("delivery.html");
+    const tableHtmlRoute = makePageRoute("table.html");
+    const driverHtmlRoute = makePageRoute("driver.html");
+    const kitchenHtmlRoute = makePageRoute("kitchen.html");
+    const indexHtmlRoute = makePageRoute("index.html");
 
     const legalPageRoutesByPath = {
-        "/obchodni-podminky": makeLegalPageRoute("obchodni-podminky.html"),
-        "/ochrana-osobnich-udaju": makeLegalPageRoute("ochrana-osobnich-udaju.html"),
-        "/reklamace": makeLegalPageRoute("reklamace.html"),
+        "/obchodni-podminky": makePageRoute("obchodni-podminky.html"),
+        "/ochrana-osobnich-udaju": makePageRoute("ochrana-osobnich-udaju.html"),
+        "/reklamace": makePageRoute("reklamace.html"),
     };
 
-    // The three template files above live under src/html/ alongside every
-    // other page (inner.html, delivery.html, ...) so loadLegalTemplate()'s
-    // candidate-path lookup matches the existing convention — but that
-    // directory is also served wholesale by express.static below, which
-    // would make the RAW, un-rendered template (still full of literal
-    // "{{NAZEV}}" etc.) directly reachable at .../html/obchodni-podminky.html
-    // etc., alongside the properly rendered version at the real
-    // /obchodni-podminky route. Blocking the static path for exactly these
-    // three filenames — registered before express.static, so it wins —
-    // closes that off without touching how any of the other pages are
-    // served (they have no server-side placeholders to leak in the first
-    // place, so this isn't needed for them).
-    const legalTemplateFileNames = ["obchodni-podminky.html", "ochrana-osobnich-udaju.html", "reklamace.html"];
-    const blockRawLegalTemplate = (req, res) => res.status(404).send("Stránka nenalezena");
+    // Every page is now a {{TOKEN}} template, and src/html/ is served
+    // wholesale by express.static below — so without this block the RAW,
+    // un-rendered page (literal "{{WORDMARK}}" on screen) would be
+    // reachable at .../html/<file> alongside the real rendered route.
+    // Registered before express.static, so it wins.
+    const templateFileNames = [
+        "index.html", "inner.html", "delivery.html", "driver.html",
+        "kitchen.html", "table.html",
+        "obchodni-podminky.html", "ochrana-osobnich-udaju.html", "reklamace.html",
+    ];
+    const blockRawTemplate = (req, res) => res.status(404).send("Stránka nenalezena");
 
     // SECURITY (audit 2026-07-29, finding F3): SERVER_CONFIG.frontendPath is
     // "src", and src/server/ lives INSIDE it — so express.static below served
@@ -2629,7 +2588,7 @@ function setupMiddleware() {
     // app.use (not app.get) so EVERY method and every sub-path under /server
     // is covered, and registered before minify + express.static in both
     // branches below so it always wins. Same 404-don't-confirm-it-exists
-    // shape as blockRawLegalTemplate above.
+    // shape as blockRawTemplate above.
     //
     // Proper fix is to move the frontend into its own directory so the
     // backend was never under the static root at all; this is the surgical
@@ -2719,8 +2678,8 @@ function setupMiddleware() {
     app.get(`${base || ""}/sw.js`, serviceWorkerRoute);
 
     if (base) {
-        for (const filename of legalTemplateFileNames) {
-            app.get(`${base}/html/${filename}`, blockRawLegalTemplate);
+        for (const filename of templateFileNames) {
+            app.get(`${base}/html/${filename}`, blockRawTemplate);
         }
         app.use(`${base}/server`, blockServerSource);
         // Minify-on-serve (design §2) MUST be mounted before express.static
@@ -2729,7 +2688,7 @@ function setupMiddleware() {
         // (non-.js/.css, *.min.js, missing file, esbuild error).
         app.use(base, minify.createMinifyMiddleware(frontendPath));
         app.use(base, express.static(frontendPath, staticOptions));
-        app.get(`${base}/app`, (req, res) => res.sendFile(path.join(frontendPath, "html", "index.html")));
+        app.get(`${base}/app`, indexHtmlRoute);
         app.get(`${base}/inner.html`, innerHtmlRoute);
         app.get(`${base}/admin`, innerHtmlRoute);
         app.get(`${base}/delivery`, deliveryHtmlRoute);
@@ -2740,13 +2699,13 @@ function setupMiddleware() {
             app.get(`${base}${route}`, handler);
         }
     } else {
-        for (const filename of legalTemplateFileNames) {
-            app.get(`/html/${filename}`, blockRawLegalTemplate);
+        for (const filename of templateFileNames) {
+            app.get(`/html/${filename}`, blockRawTemplate);
         }
         app.use("/server", blockServerSource);
         app.use(minify.createMinifyMiddleware(frontendPath));
         app.use(express.static(frontendPath, staticOptions));
-        app.get("/app", (req, res) => res.sendFile(path.join(frontendPath, "html", "index.html")));
+        app.get("/app", indexHtmlRoute);
         app.get("/inner.html", innerHtmlRoute);
         app.get("/admin", innerHtmlRoute);
         app.get("/delivery", deliveryHtmlRoute);

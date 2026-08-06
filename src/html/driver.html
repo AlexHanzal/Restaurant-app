@@ -3,17 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rozvoz — Řidiči</title>
+<title>Rozvoz — Řidiči — {{BRAND_NAME}}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/reservation/css/design.css">
-<link rel="stylesheet" href="/reservation/css/driver-page.css">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/driver-page.css">
+{{BRAND_STYLE}}
 </head>
 <body>
 
 <!-- Login gate -->
 <div class="drv-gate" id="loginGateOverlay">
     <div class="ds-card drv-gate__card">
-        <span class="ds-wordmark">Restaurace</span>
+        <span class="ds-wordmark">{{WORDMARK}}</span>
         <h2 class="drv-gate__title">Přihlášení řidiče</h2>
         <p class="drv-gate__hint">Pro zobrazení objednávek k rozvozu se prosím přihlaste svým účtem (vytvořeným v administraci se zaškrtnutým „Řidič“).</p>
         <div class="drv-field-group">
@@ -30,7 +31,7 @@
 </div>
 
 <header class="ds-page-header">
-    <span class="ds-wordmark">Restaurace</span>
+    <span class="ds-wordmark">{{WORDMARK}}</span>
     <div class="ds-page-header__actions">
         <span class="drv-driver-name" id="loggedInDriverText"></span>
         <button type="button" class="ds-btn ds-btn--ghost drv-hidden" id="logoutBtn">Odhlásit</button>
@@ -49,7 +50,7 @@
      window.API_BASE_URL bootstrap script was removed (it was dead code,
      always overwritten by config.js's autoDetectBackend()) rather than
      kept — this lets the CSP script-src drop 'unsafe-inline'. -->
-<script src="/reservation/config.js"></script>
-<script src="/reservation/js/driver.js"></script>
+<script src="{{BASE}}/config.js"></script>
+<script src="{{BASE}}/js/driver.js"></script>
 </body>
 </html>

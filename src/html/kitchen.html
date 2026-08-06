@@ -3,15 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Kuchyně — Objednávky</title>
+<title>Kuchyně — {{BRAND_NAME}}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/reservation/css/design.css">
-<link rel="stylesheet" href="/reservation/css/kitchen-page.css">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/kitchen-page.css">
+{{BRAND_STYLE}}
 </head>
 <body>
 
 <header class="ds-page-header kit-header">
-    <span class="ds-wordmark">Restaurace</span>
+    <span class="ds-wordmark">{{WORDMARK}}</span>
     <div class="ds-page-header__actions">
         <div class="kit-header__meta">
             <span class="kit-clock" id="kitClock"></span>
@@ -46,7 +47,7 @@
      window.API_BASE_URL bootstrap script was removed (it was dead code,
      always overwritten by config.js's autoDetectBackend()) rather than
      kept — this lets the CSP script-src drop 'unsafe-inline'. -->
-<script src="/reservation/config.js"></script>
-<script src="/reservation/js/kitchen.js"></script>
+<script src="{{BASE}}/config.js"></script>
+<script src="{{BASE}}/js/kitchen.js"></script>
 </body>
 </html>

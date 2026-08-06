@@ -3,15 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Rozvoz — Jídelní lístek</title>
+<title>Rozvoz — {{BRAND_NAME}}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/reservation/css/design.css">
-<link rel="stylesheet" href="/reservation/css/delivery-page.css">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/delivery-page.css">
+{{BRAND_STYLE}}
 </head>
 <body>
 
 <header class="ds-page-header">
-  <span class="ds-wordmark">Restaurace</span>
+  <span class="ds-wordmark">{{WORDMARK}}</span>
   <span class="ds-page-header__section">Rozvoz</span>
 </header>
 
@@ -46,9 +47,9 @@
        delivery.js) — the static "[doplnit]" placeholder text is gone. -->
   <span id="footerBusinessLine"></span>
   <nav class="del-footer__links">
-    <a href="/reservation/obchodni-podminky">Obchodní podmínky</a>
-    <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
-    <a href="/reservation/reklamace">Reklamační řád</a>
+    <a href="{{BASE}}/obchodni-podminky">Obchodní podmínky</a>
+    <a href="{{BASE}}/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
+    <a href="{{BASE}}/reklamace">Reklamační řád</a>
   </nav>
 </footer>
 
@@ -229,11 +230,11 @@
      effect. Removed rather than kept as an inline <script>, which lets the
      CSP's script-src drop 'unsafe-inline' entirely — see configureHelmet()
      in src/server/server.js. -->
-<script src="/reservation/config.js"></script>
+<script src="{{BASE}}/config.js"></script>
 <!-- Shared menu data layer (src/js/menu-catalog.js) — also used by the QR
      table-order page (src/js/table-order.js). Must load before delivery.js,
      which reads window.MenuCatalog at parse time. -->
-<script src="/reservation/js/menu-catalog.js"></script>
-<script src="/reservation/js/delivery.js"></script>
+<script src="{{BASE}}/js/menu-catalog.js"></script>
+<script src="{{BASE}}/js/delivery.js"></script>
 </body>
 </html>

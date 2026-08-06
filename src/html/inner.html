@@ -3,23 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Správa stolů — Přehled</title>
+<title>Správa stolů — {{BRAND_NAME}}</title>
 <link rel="icon" href="data:,">
 <!-- Shared warm-minimal design system (tokens + components) -->
-<link rel="stylesheet" href="/reservation/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
 <!-- Floorplan table picking (docs/superpowers/specs/2026-07-27-floorplan-
      table-picking-design.md §5.3) — shared with index.html. Loaded before
      inner.css so the page's own rules can still win on specificity ties if
      ever needed. -->
-<link rel="stylesheet" href="/reservation/css/floorplan.css">
+<link rel="stylesheet" href="{{BASE}}/css/floorplan.css">
 <!-- This page's own layout -->
-<link rel="stylesheet" href="/reservation/css/inner.css">
+<link rel="stylesheet" href="{{BASE}}/css/inner.css">
 <!-- Offline-first POS (docs/superpowers/specs/2026-08-02-offline-first-pos-
      design.md §3.2) — makes the till installable on the bar's tablets,
      which on Android is also what earns durable IndexedDB storage for the
      unsent-sales queue. -->
-<link rel="manifest" href="/reservation/manifest.json">
+<link rel="manifest" href="{{BASE}}/manifest.json">
 <meta name="theme-color" content="#111111">
+{{BRAND_STYLE}}
 </head>
 <body>
 
@@ -386,17 +387,17 @@
      window.API_BASE_URL bootstrap script was removed (it was dead code,
      always overwritten by config.js's autoDetectBackend()) rather than
      kept — this lets the CSP script-src drop 'unsafe-inline'. -->
-<script src="/reservation/config.js"></script>
-<script src="/reservation/js/qr.js"></script>
+<script src="{{BASE}}/config.js"></script>
+<script src="{{BASE}}/js/qr.js"></script>
 <!-- Floorplan (design §5.1) — must load before inner.js, which calls the
      global FloorPlan object it exposes from renderWaiterView/renderOverview/
      renderLayoutView. -->
-<script src="/reservation/js/floorplan.js"></script>
+<script src="{{BASE}}/js/floorplan.js"></script>
 <!-- Offline-first POS (spec §3.1/§3.3) — both MUST load before inner.js,
      which calls into POSDB/POSSync during its own startup. -->
-<script src="/reservation/js/pos-db.js"></script>
-<script src="/reservation/js/pos-sync.js"></script>
-<script src="/reservation/js/inner.js"></script>
-<script src="/reservation/js/sales-stats-view.js"></script>
+<script src="{{BASE}}/js/pos-db.js"></script>
+<script src="{{BASE}}/js/pos-sync.js"></script>
+<script src="{{BASE}}/js/inner.js"></script>
+<script src="{{BASE}}/js/sales-stats-view.js"></script>
 </body>
 </html>

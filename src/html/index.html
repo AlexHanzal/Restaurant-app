@@ -3,18 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Rezervace stolu</title>
+    <title>Rezervace stolu — {{BRAND_NAME}}</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/reservation/css/design.css">
-    <link rel="stylesheet" href="/reservation/css/reservation.css">
+    <link rel="stylesheet" href="{{BASE}}/css/design.css">
+    <link rel="stylesheet" href="{{BASE}}/css/reservation.css">
     <!-- Floorplan table picking (docs/superpowers/specs/2026-07-27-floorplan-
          table-picking-design.md §5.1/§6.1) — shared module, also loaded by
          inner.html for the admin surfaces. -->
-    <link rel="stylesheet" href="/reservation/css/floorplan.css">
+    <link rel="stylesheet" href="{{BASE}}/css/floorplan.css">
+    {{BRAND_STYLE}}
 </head>
 <body>
   <header class="ds-page-header">
-    <span class="ds-wordmark">Restaurace</span>
+    <span class="ds-wordmark">{{WORDMARK}}</span>
     <span class="ds-page-header__section">Rezervace</span>
   </header>
 
@@ -112,9 +113,9 @@
          renderer.js) — the static "[doplnit]" placeholder text is gone. -->
     <span id="footerBusinessLine"></span>
     <nav class="rsv-footer__links">
-      <a href="/reservation/obchodni-podminky">Obchodní podmínky</a>
-      <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
-      <a href="/reservation/reklamace">Reklamační řád</a>
+      <a href="{{BASE}}/obchodni-podminky">Obchodní podmínky</a>
+      <a href="{{BASE}}/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
+      <a href="{{BASE}}/reklamace">Reklamační řád</a>
     </nav>
   </footer>
 
@@ -249,11 +250,11 @@
 
   <div class="ds-toast" id="rsvToast"></div>
 
-  <script src="/reservation/config.js"></script>
+  <script src="{{BASE}}/config.js"></script>
   <!-- Shared floorplan module (design §5.1) — must load before renderer.js,
        which calls FloorPlan.render()/.partitionTables() while building the
        tables section. -->
-  <script src="/reservation/js/floorplan.js"></script>
-  <script src="/reservation/js/renderer.js"></script>
+  <script src="{{BASE}}/js/floorplan.js"></script>
+  <script src="{{BASE}}/js/renderer.js"></script>
 </body>
 </html>

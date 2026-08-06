@@ -3,17 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Obchodní podmínky</title>
+<title>Obchodní podmínky — {{BRAND_NAME}}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/reservation/css/design.css">
-<link rel="stylesheet" href="/reservation/css/legal.css">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/legal.css">
+{{BRAND_STYLE}}
 </head>
 <body>
 
 <header class="ds-page-header">
-  <span class="ds-wordmark">Restaurace</span>
+  <span class="ds-wordmark">{{WORDMARK}}</span>
   <div class="ds-page-header__actions">
-    <a class="legal-back-link" href="/reservation/app">‹ Zpět na web</a>
+    <a class="legal-back-link" href="{{HOME}}">‹ Zpět na web</a>
   </div>
 </header>
 
@@ -124,7 +125,7 @@
   <section class="legal-section">
     <h2>8. Reklamace</h2>
     <p>Práva zákazníka z vadného plnění a postup jejich uplatnění upravuje samostatný
-      <a href="/reservation/reklamace">reklamační řád</a>, který je nedílnou součástí těchto obchodních
+      <a href="{{BASE}}/reklamace">reklamační řád</a>, který je nedílnou součástí těchto obchodních
       podmínek.</p>
   </section>
 
@@ -132,7 +133,7 @@
     <h2>9. Ochrana osobních údajů</h2>
     <p>Zpracování osobních údajů zákazníka v souvislosti s objednávkami a rezervacemi, včetně účelů, právních
       základů, doby uchování a práv zákazníka, je popsáno v samostatném dokumentu
-      <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>.</p>
+      <a href="{{BASE}}/ochrana-osobnich-udaju">Ochrana osobních údajů</a>.</p>
   </section>
 
   <section class="legal-section">
@@ -159,10 +160,10 @@
 
 <footer class="legal-footer">
   <div class="legal-footer-links">
-    <a href="/reservation/obchodni-podminky">Obchodní podmínky</a>
-    <a href="/reservation/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
-    <a href="/reservation/reklamace">Reklamační řád</a>
-    <a href="/reservation/app">Zpět na web</a>
+    <a href="{{BASE}}/obchodni-podminky">Obchodní podmínky</a>
+    <a href="{{BASE}}/ochrana-osobnich-udaju">Ochrana osobních údajů</a>
+    <a href="{{BASE}}/reklamace">Reklamační řád</a>
+    <a href="{{HOME}}">Zpět na web</a>
   </div>
   <div class="legal-footer-business">{{NAZEV}} · IČO: {{ICO}} · {{ADRESA}}</div>
 </footer>

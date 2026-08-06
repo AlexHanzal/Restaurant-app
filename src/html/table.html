@@ -3,21 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Objednávka u stolu</title>
+<title>Objednávka u stolu — {{BRAND_NAME}}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/reservation/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
 <!-- Reused wholesale (spec 2026-08-04 §8.2): the dish-row / cart-sheet /
      combo-dialog markup below leans entirely on .del-* classes already
      defined for the delivery page. table-page.css (loaded after) holds
      ONLY what this page needs beyond that — the loading/error/status
      screens and the table-name hero, none of which delivery.html has. -->
-<link rel="stylesheet" href="/reservation/css/delivery-page.css">
-<link rel="stylesheet" href="/reservation/css/table-page.css">
+<link rel="stylesheet" href="{{BASE}}/css/delivery-page.css">
+<link rel="stylesheet" href="{{BASE}}/css/table-page.css">
+{{BRAND_STYLE}}
 </head>
 <body>
 
 <header class="ds-page-header">
-  <span class="ds-wordmark">Restaurace</span>
+  <span class="ds-wordmark">{{WORDMARK}}</span>
   <span class="ds-page-header__section">Objednávka u stolu</span>
 </header>
 
@@ -162,11 +163,11 @@
 <!-- SECURITY: no inline scripts — see the identical note in delivery.html;
      configureHelmet()'s CSP in src/server/server.js drops 'unsafe-inline'
      from script-src, so every script here is an external file. -->
-<script src="/reservation/config.js"></script>
+<script src="{{BASE}}/config.js"></script>
 <!-- Shared menu data layer — MUST load before table-order.js, which reads
      window.MenuCatalog at parse time (see menu-catalog.js's own header
      comment on load order). -->
-<script src="/reservation/js/menu-catalog.js"></script>
-<script src="/reservation/js/table-order.js"></script>
+<script src="{{BASE}}/js/menu-catalog.js"></script>
+<script src="{{BASE}}/js/table-order.js"></script>
 </body>
 </html>
