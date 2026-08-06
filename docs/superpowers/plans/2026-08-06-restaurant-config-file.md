@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - **No new npm dependencies.** Zero. The repo ships without a build step and that must stay true.
-- **Absent config file = today's exact behaviour.** Every built-in default in `brand.js` must reproduce the current hardcoded value byte-for-byte. This is the property that keeps existing deploys and the whole existing test suite unaffected.
+- **Absent config file = today's exact behaviour.** Every built-in default in `brand.js` must reproduce the current hardcoded value byte-for-byte. This is the property that keeps existing deploys and the whole existing test suite unaffected. **One intentional exception:** page `<title>`s gain a ` — {{BRAND_NAME}}` suffix for everyone, config file or not (owner decision, 2026-08-06). Nothing else may change.
+- **`escapeHtml` lives in exactly one place.** `src/server/html-escape.js`. Never copy it — `server.js` and `brand.js` both require it.
 - **No secrets in the config file.** `JWT_SECRET`, Twilio, SMTP, GoPay and EET credentials stay in `.env`. Nothing in `brand.js` may read them.
 - **UI text is Czech.** Every user-facing string, every validation error message, and every comment in `restaurace.config.example.js` is Czech. Code comments in `src/` stay English, matching the repo.
 - **Classic `<script>` tags share one global lexical environment.** Two files declaring the same top-level `const` is a SyntaxError that silently kills the second file. Anything added to `src/config.js` must not collide with `renderer.js`/`inner.js`/`delivery.js` top-level names.
@@ -46,7 +47,9 @@ Task 1 builds `brand.js` standalone with unit tests — nothing else depends on 
 ### Task 1: The config loader — `src/server/brand.js`
 
 **Files:**
+- Create: `src/server/html-escape.js`
 - Create: `src/server/brand.js`
+- Modify: `src/server/server.js` (delete its local `escapeHtml`, require the shared one)
 - Test: `tests/unit/brand.test.js`
 
 **Interfaces:**
@@ -251,7 +254,39 @@ npm run test:unit
 
 Expected: FAIL — `Cannot find module '../../src/server/brand.js'`.
 
-- [ ] **Step 3: Write `src/server/brand.js`**
+- [ ] **Step 3: Extract the shared HTML escaper**
+
+Create `src/server/html-escape.js`, moving the function **verbatim** from `src/server/server.js:1681` — do not retype it, do not "improve" it, and do not change its null handling:
+
+```js
+// ============================================================================
+// html-escape.js — the one HTML escaper this app uses.
+//
+// Lived inline in server.js until brand.js needed it too. brand.js cannot
+// require server.js (server.js requires brand.js — that's a cycle) and unit
+// tests require brand.js directly without booting a server, so the function
+// moved into its own zero-dependency module rather than being copied into
+// both and left to drift.
+// ============================================================================
+
+function escapeHtml(str) {
+    return String(str == null ? "" : str).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[ch]));
+}
+
+module.exports = { escapeHtml };
+```
+
+In `src/server/server.js`, delete the local `function escapeHtml(str) {...}` (line ~1681) and add to the require block near the top:
+
+```js
+const { escapeHtml } = require("./html-escape");
+```
+
+Every existing call site keeps working unchanged — same name, same signature, same behaviour.
+
+- [ ] **Step 4: Write `src/server/brand.js`**
 
 ```js
 // ============================================================================
@@ -275,6 +310,11 @@ Expected: FAIL — `Cannot find module '../../src/server/brand.js'`.
 
 const path = require("path");
 const { mergeDefaults } = require("./settings");
+// Shared with server.js. brand.js must stay loadable without pulling in the
+// whole server (unit tests require it directly, and server.js requires
+// brand.js — importing back would be a cycle), so the escaper lives in its
+// own tiny module rather than being copied into both.
+const { escapeHtml } = require("./html-escape");
 
 // Absolute path of the config file. RESTAURANT_CONFIG exists so smoke tests
 // can point at a temp file instead of writing into the real repo root (the
@@ -534,19 +574,6 @@ function tokenValues() {
     };
 }
 
-// Mirrors escapeHtml() in server.js. Duplicated rather than imported
-// because brand.js must stay loadable without pulling in the whole server
-// (unit tests require it directly, and server.js requires brand.js — an
-// import the other way would be a cycle).
-function escapeHtml(str) {
-    return String(str)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#39;");
-}
-
 // Replaces {{TOKEN}} occurrences. An unknown token is left EXACTLY as it
 // was rather than blanked — that can only come from a typo in a template,
 // and a visible "{{NEZNAMY}}" makes the bug obvious instead of hiding it.
@@ -575,26 +602,26 @@ module.exports = {
 };
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
 npm run test:unit
 ```
 
-Expected: PASS — all existing unit tests plus the ~25 new `brand.test.js` cases.
+Expected: PASS — all existing unit tests plus the ~26 new `brand.test.js` cases.
 
-- [ ] **Step 5: Confirm the rest of the suite is untouched**
+- [ ] **Step 6: Confirm the rest of the suite is untouched**
 
 ```bash
 npm run test:smoke
 ```
 
-Expected: PASS, unchanged. `brand.js` is not required by anything yet.
+Expected: PASS, unchanged. `brand.js` is not required by anything yet; the escaper move is behaviour-neutral.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/server/brand.js tests/unit/brand.test.js
+git add src/server/html-escape.js src/server/brand.js src/server/server.js tests/unit/brand.test.js
 git commit -m "feat(config): load and validate an optional per-restaurant config file"
 ```
 
