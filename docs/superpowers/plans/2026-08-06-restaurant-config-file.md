@@ -1330,9 +1330,35 @@ test("seeding: an existing settings record is never overwritten", async (t) => {
         defaults: { delivery: { fee: 59 } },
     };`);
 
+    // This test boots TWICE against ONE database, so it owns the DB path
+    // itself instead of using the harness's. Two reasons, both learned the
+    // hard way:
+    //   - harness.stop() deletes the DB path IT generated. If the first boot
+    //     used the harness's own path, stopping it would delete the very
+    //     file the second boot is supposed to find already populated, and
+    //     the "redeploy" being tested would silently become a fresh install.
+    //   - passing SQLITE_PATH makes the harness's generated path unused, so
+    //     its cleanup is a harmless no-op on a file that never existed.
+    const dbUnique = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const dbPath = path.join(os.tmpdir(), `seed-persist-${dbUnique}.db`);
+    const bootEnv = { RESTAURANT_CONFIG: configPath, SQLITE_PATH: dbPath };
+
+    const servers = [];
+    t.after(async () => {
+        // Registered BEFORE the first assertion runs. A failing assertion
+        // must not orphan a spawned server: node:test will not exit while a
+        // child process is alive, so a leaked one turns a red test into a
+        // run that hangs forever with no output.
+        for (const s of servers) await s.stop();
+        for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+            try { fs.unlinkSync(dbPath + suffix); } catch { /* never existed */ }
+        }
+        try { fs.unlinkSync(configPath); } catch { /* already gone */ }
+    });
+
     // First boot seeds fee = 59.
-    const first = await harness.start({ env: { RESTAURANT_CONFIG: configPath } });
-    const dbPath = first.dbPath;
+    const first = await harness.start({ env: bootEnv });
+    servers.push(first);
     assert.strictEqual(
         harness.readRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID).delivery.fee, 59);
 
@@ -1341,16 +1367,11 @@ test("seeding: an existing settings record is never overwritten", async (t) => {
     settings.delivery.fee = 65;
     harness.seedRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID, settings);
     await first.stop();
+    servers.pop();
 
-    // A redeploy must NOT revert it. Reuse the same DB file by pointing a
-    // fresh server at it.
-    const second = await harness.start({
-        env: { RESTAURANT_CONFIG: configPath, SQLITE_PATH: dbPath },
-    });
-    t.after(async () => {
-        await second.stop();
-        try { fs.unlinkSync(configPath); } catch { /* already gone */ }
-    });
+    // A redeploy must NOT revert it.
+    const second = await harness.start({ env: bootEnv });
+    servers.push(second);
 
     assert.strictEqual(
         harness.readRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID).delivery.fee, 65,
