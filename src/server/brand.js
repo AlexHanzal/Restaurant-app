@@ -316,7 +316,7 @@ function tokenValues() {
 // Replaces {{TOKEN}} occurrences. An unknown token is left EXACTLY as it
 // was rather than blanked — that can only come from a typo in a template,
 // and a visible "{{NEZNAMY}}" makes the bug obvious instead of hiding it.
-// Same convention as renderLegalTemplate() in server.js.
+// Same convention as renderPage() in server.js.
 function renderTokens(rawHtml, extraTokens) {
     const tokens = { ...tokenValues(), ...(extraTokens || {}) };
     return String(rawHtml).replace(/\{\{(\w+)\}\}/g, (match, key) => {
