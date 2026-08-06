@@ -45,6 +45,10 @@ const SERVER_CONFIG = {
         orders: "orders",
         indoorOrders: "indoor_orders",
         menu: "menu",
+        // The restaurant settings singleton (hours/closed days/pause/
+        // delivery rules/…) — see settings.js. Record id is "restaurant"
+        // (settings.js's own SETTINGS_ID), not "settings".
+        settings: "settings",
         // go-live Task 3 (spec §5): daily specials ("polední menu"), one
         // record per calendar date, id = "YYYY-MM-DD" — see the
         // "DAILY MENU" section further down for the shape/routes.
@@ -2165,6 +2169,31 @@ async function initializeData() {
     // never 500s on a fresh DB, mirroring the menu seed just above.
     if (!db.get(COL.combos, COMBOS_SINGLETON_ID)) {
         db.set(COL.combos, COMBOS_SINGLETON_ID, []);
+    }
+
+    // Per-restaurant starting values (docs/superpowers/specs/
+    // 2026-08-06-restaurant-config-file-design.md §3). ONLY on a DB that has
+    // no settings record at all — i.e. a brand-new installation. An existing
+    // install already has one, and the owner's own edits in admin Nastavení
+    // are the truth from then on; re-applying the config file on every boot
+    // would silently revert their changes on the next redeploy and look
+    // exactly like a bug.
+    //
+    // The record id is "restaurant", NOT "settings" — writing to
+    // settings/settings creates a second, unused record while the app keeps
+    // serving the real one. See settings.js's SETTINGS_ID.
+    if (!db.get(COL.settings, "restaurant")) {
+        const seed = settingsStore.getSettings(); // full canonical shape
+        // mergeDefaults(defaults, value) returns something shaped exactly
+        // like `defaults` with `value`'s values filled in, recursively —
+        // so nested presets like defaults.reservations.days land correctly,
+        // fields the config file never mentions keep settings.js's own
+        // default, and anything bogus is dropped by settings.js, which is
+        // the module that actually owns this shape. A shallow spread here
+        // would silently drop one level down (e.g. delivery.days).
+        const overlay = { ...brand.config.defaults, business: brand.config.business };
+        settingsStore.saveSettings(settingsStore.mergeDefaults(seed, overlay));
+        console.log("Nastavení restaurace inicializováno z konfiguračního souboru.");
     }
 }
 

@@ -177,3 +177,110 @@ test("features: dailyMenu off 404s its API route", async (t) => {
     const res = await fetch(`${server.api}/daily-menu`);
     assert.strictEqual(res.status, 404, "GET /api/daily-menu must 404 when dailyMenu is off");
 });
+
+test("seeding: a fresh DB takes its starting values from the config file", async (t) => {
+    const configPath = writeTempConfig(`module.exports = {
+        defaults: {
+            delivery: { fee: 59, minOrder: 250, freeAbove: 700,
+                        pscWhitelist: ["11000"], etaMinutes: 45 },
+            dailyMenu: { from: "10:30", to: "13:30" },
+        },
+        business: { name: "U Kalicha s.r.o.", ico: "87654321",
+                    dic: "CZ87654321", address: "Na Bojišti 12, 128 00 Praha 2",
+                    email: "info@ukalicha.cz", phone: "+420 601 234 567" },
+    };`);
+
+    const server = await harness.start({ env: { RESTAURANT_CONFIG: configPath } });
+    t.after(async () => {
+        await server.stop();
+        try { fs.unlinkSync(configPath); } catch { /* already gone */ }
+    });
+
+    const stored = harness.readRecord(server.dbPath, harness.COL.settings, harness.SETTINGS_ID);
+    assert.ok(stored, "a fresh DB must get a seeded settings record");
+    assert.strictEqual(stored.delivery.fee, 59);
+    assert.strictEqual(stored.delivery.minOrder, 250);
+    assert.deepStrictEqual(stored.delivery.pscWhitelist, ["11000"]);
+    assert.strictEqual(stored.dailyMenu.from, "10:30");
+    assert.strictEqual(stored.business.ico, "87654321");
+    assert.strictEqual(stored.business.phone, "+420 601 234 567");
+
+    // Values the config file said nothing about keep settings.js's defaults.
+    assert.strictEqual(stored.reservations.paused, false);
+    assert.strictEqual(stored.tableOrdering.enabled, false);
+    // …including the ones one level below something the config DID set.
+    assert.strictEqual(stored.delivery.days["0"].from, "10:30");
+});
+
+test("seeding: a nested preset reaches the settings record", async (t) => {
+    const configPath = writeTempConfig(`module.exports = {
+        defaults: {
+            reservations: { days: { "6": { open: false, fromHour: 1, toHour: 12 } } },
+            notifications: { smsReservationReminder: true },
+        },
+    };`);
+
+    const server = await harness.start({ env: { RESTAURANT_CONFIG: configPath } });
+    t.after(async () => {
+        await server.stop();
+        try { fs.unlinkSync(configPath); } catch { /* already gone */ }
+    });
+
+    const stored = harness.readRecord(server.dbPath, harness.COL.settings, harness.SETTINGS_ID);
+    assert.strictEqual(stored.reservations.days["6"].open, false, "Sunday must be seeded closed");
+    assert.strictEqual(stored.reservations.days["0"].open, true, "other days keep the default");
+    assert.strictEqual(stored.notifications.smsReservationReminder, true);
+});
+
+test("seeding: an existing settings record is never overwritten", async (t) => {
+    const configPath = writeTempConfig(`module.exports = {
+        defaults: { delivery: { fee: 59 } },
+    };`);
+
+    // This test boots TWICE against ONE database, so it owns the DB path
+    // itself instead of using the harness's. Two reasons, both learned the
+    // hard way:
+    //   - harness.stop() deletes the DB path IT generated. If the first boot
+    //     used the harness's own path, stopping it would delete the very
+    //     file the second boot is supposed to find already populated, and
+    //     the "redeploy" being tested would silently become a fresh install.
+    //   - passing SQLITE_PATH makes the harness's generated path unused, so
+    //     its cleanup is a harmless no-op on a file that never existed.
+    const dbUnique = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const dbPath = path.join(os.tmpdir(), `seed-persist-${dbUnique}.db`);
+    const bootEnv = { RESTAURANT_CONFIG: configPath, SQLITE_PATH: dbPath };
+
+    const servers = [];
+    t.after(async () => {
+        // Registered BEFORE the first assertion runs. A failing assertion
+        // must not orphan a spawned server: node:test will not exit while a
+        // child process is alive, so a leaked one turns a red test into a
+        // run that hangs forever with no output.
+        for (const s of servers) await s.stop();
+        for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+            try { fs.unlinkSync(dbPath + suffix); } catch { /* never existed */ }
+        }
+        try { fs.unlinkSync(configPath); } catch { /* already gone */ }
+    });
+
+    // First boot seeds fee = 59.
+    const first = await harness.start({ env: bootEnv });
+    servers.push(first);
+    assert.strictEqual(
+        harness.readRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID).delivery.fee, 59);
+
+    // The owner changes it in the panel.
+    const settings = harness.readRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID);
+    settings.delivery.fee = 65;
+    harness.seedRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID, settings);
+    await first.stop();
+    servers.pop();
+
+    // A redeploy must NOT revert it.
+    const second = await harness.start({ env: bootEnv });
+    servers.push(second);
+
+    assert.strictEqual(
+        harness.readRecord(dbPath, harness.COL.settings, harness.SETTINGS_ID).delivery.fee, 65,
+        "a redeploy must not clobber the owner's own panel edit");
+});
