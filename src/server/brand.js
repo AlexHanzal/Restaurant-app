@@ -96,7 +96,27 @@ try {
     // supported state. Anything else — a syntax error, a throw inside the
     // file, a missing require of its own — is a real problem the operator
     // must see, not something to swallow into silent defaults.
-    const missing = err && err.code === "MODULE_NOT_FOUND" && err.message.includes(CONFIG_PATH);
+    //
+    // Checking `err.message.includes(CONFIG_PATH)` is NOT enough: Node's
+    // MODULE_NOT_FOUND message ends with a "Require stack:" trailer that
+    // lists every file in the chain, INCLUDING the file that did the
+    // (failing) require. So when CONFIG_PATH exists and itself does
+    // `require("./something-missing")`, CONFIG_PATH still appears in that
+    // trailer and the substring check would wrongly classify a broken
+    // config as "no config file", silently booting on hardcoded defaults.
+    //
+    // `err.requireStack` is the fix: it lists only modules that were
+    // successfully RESOLVED and had already started executing before the
+    // failing require call — the module that itself failed to resolve is
+    // never a member of that array (confirmed against Node 26 directly: a
+    // missing CONFIG_PATH produces requireStack = [callers of brand.js],
+    // never containing CONFIG_PATH; a missing require INSIDE an existing
+    // CONFIG_PATH produces requireStack = [CONFIG_PATH, ...], since
+    // CONFIG_PATH had already been entered). So "no config file" is
+    // precisely: CONFIG_PATH does NOT appear anywhere in requireStack.
+    const missing = err && err.code === "MODULE_NOT_FOUND"
+        && Array.isArray(err.requireStack)
+        && !err.requireStack.includes(CONFIG_PATH);
     if (!missing) {
         throw new Error(
             `Konfigurační soubor restaurace se nepodařilo načíst (${CONFIG_PATH}): ${err.message}`
@@ -248,7 +268,17 @@ deepFreeze(config);
 // one: it IS markup by construction, and every value interpolated into it
 // has already been validated against HEX_RE above, so nothing attacker- or
 // even typo-controlled can reach it.
-const RAW_TOKENS = new Set(["BRAND_STYLE"]);
+//
+// Kept module-private and exposed only through isRawToken() below rather
+// than exported directly: a Set is mutable even when the module that owns
+// it is not, and Object.freeze() on a Set does not stop .add()/.delete()
+// anyway. Exporting it live would let any later consumer add a name to the
+// unescaped list and silently change HTML escaping for the whole process.
+const RAW_TOKEN_NAMES = new Set(["BRAND_STYLE"]);
+
+function isRawToken(name) {
+    return RAW_TOKEN_NAMES.has(name);
+}
 
 function brandStyleTag() {
     return `<style>:root{`
@@ -291,7 +321,7 @@ function renderTokens(rawHtml, extraTokens) {
     const tokens = { ...tokenValues(), ...(extraTokens || {}) };
     return String(rawHtml).replace(/\{\{(\w+)\}\}/g, (match, key) => {
         if (!Object.prototype.hasOwnProperty.call(tokens, key)) return match;
-        return RAW_TOKENS.has(key) ? tokens[key] : escapeHtml(tokens[key]);
+        return isRawToken(key) ? tokens[key] : escapeHtml(tokens[key]);
     });
 }
 
@@ -303,7 +333,7 @@ module.exports = {
     config,
     loaded,
     CONFIG_PATH,
-    RAW_TOKENS,
+    isRawToken,
     isEnabled,
     tokenValues,
     renderTokens,

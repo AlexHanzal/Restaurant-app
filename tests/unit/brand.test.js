@@ -88,6 +88,15 @@ test("the exported config is deeply frozen", () => {
     const brand = loadBrand(null);
     assert.throws(() => { brand.config.brand.wordmark = "x"; }, TypeError);
     assert.throws(() => { brand.config.features.delivery = false; }, TypeError);
+    // Third-level nesting (brand.pwa.*) — a deepFreeze that only walks one
+    // or two levels deep would miss this and this assignment would fail
+    // silently instead of throwing.
+    assert.throws(() => { brand.config.brand.pwa.iconLetter = "x"; }, TypeError);
+    // Arrays are objects too, but Object.freeze() on an array still allows
+    // Array.prototype methods that mutate in place (push/pop/splice) unless
+    // deepFreeze actually recurses into array values, not just plain-object
+    // values. Cover that separately from the plain-object cases above.
+    assert.throws(() => { brand.config.defaults.delivery.pscWhitelist.push("99999"); }, TypeError);
 });
 
 test("isEnabled reads the feature flags", () => {
@@ -168,6 +177,26 @@ test("accepts a 3-digit hex accent", () => {
 test("a config file that throws on require is reported with its path", () => {
     assert.throws(
         () => loadBrand(`throw new Error("boom");`),
+        (err) => {
+            assert.ok(err.message.includes("restaurace"), "should name the config file");
+            return true;
+        }
+    );
+});
+
+// Regression test for a bug where a REAL config file that itself requires a
+// missing module was misdiagnosed as "no config file present". Node's
+// MODULE_NOT_FOUND error message includes a "Require stack:" trailer that
+// lists every file in the chain — INCLUDING the config file that did the
+// (failing) requiring. A naive `err.message.includes(CONFIG_PATH)` check is
+// true in that trailer even though CONFIG_PATH itself was found and loaded
+// just fine; the actually-missing module is something CONFIG_PATH required.
+// That must throw and name the config file — not be swallowed into silent
+// defaults, which would boot the server on hardcoded values with nobody told
+// the operator's config was ignored.
+test("a config file that exists but itself requires a missing module is not swallowed as 'no config'", () => {
+    assert.throws(
+        () => loadBrand(`module.exports = require("./this-helper-does-not-exist");`),
         (err) => {
             assert.ok(err.message.includes("restaurace"), "should name the config file");
             return true;
