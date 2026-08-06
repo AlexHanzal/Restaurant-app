@@ -945,9 +945,18 @@ and declare them alongside the other page routes:
             // JSON literals, not HTML — brand.renderTokens would escape the
             // quotes into &quot; and produce a syntax error, so these two
             // tokens are substituted directly.
+            //
+            // SECURITY: the replacement must be a FUNCTION, not a string.
+            // String.prototype.replace(regex, stringValue) treats $$, $`,
+            // $', $& (and $<n>) inside stringValue as special replacement
+            // patterns — regardless of whether the regex has capture groups
+            // — so a brand name containing e.g. "$&" would splice the whole
+            // match back into the output instead of being inserted literally.
+            // A function replacer sidesteps that interpretation entirely.
+            // Same pattern as brand.renderTokens / renderPage above.
             renderedConfigJs = rawJs
-                .replace(/\{\{APP_FEATURES_JSON\}\}/g, featuresJson)
-                .replace(/\{\{APP_BRAND_JSON\}\}/g, appBrandJson);
+                .replace(/\{\{APP_FEATURES_JSON\}\}/g, () => featuresJson)
+                .replace(/\{\{APP_BRAND_JSON\}\}/g, () => appBrandJson);
         }
         res.set("Content-Type", "application/javascript; charset=utf-8");
         res.set("Cache-Control", "no-cache");
@@ -973,11 +982,16 @@ and declare them alongside the other page routes:
             if (rawJson == null) return res.status(404).json({ error: "manifest not found" });
             // JSON string values, so escape for JSON rather than for HTML.
             const jsonToken = (value) => JSON.stringify(String(value)).slice(1, -1);
+            // SECURITY: function replacer, not a string — see the identical
+            // note in configJsRoute above. jsonToken()'s output can itself
+            // contain "$&" etc. (e.g. a brand name with a literal ampersand
+            // preceded by a dollar sign), so passing it as a plain string
+            // replacement is exactly as unsafe here as it is for config.js.
             renderedManifest = rawJson
-                .replace(/\{\{PWA_NAME\}\}/g, jsonToken(brand.config.brand.pwa.name))
-                .replace(/\{\{PWA_SHORT_NAME\}\}/g, jsonToken(brand.config.brand.pwa.shortName))
-                .replace(/\{\{PWA_THEME_COLOR\}\}/g, jsonToken(brand.config.brand.pwa.themeColor))
-                .replace(/\{\{PWA_ICON_SVG\}\}/g, jsonToken(pwaIconDataUri()));
+                .replace(/\{\{PWA_NAME\}\}/g, () => jsonToken(brand.config.brand.pwa.name))
+                .replace(/\{\{PWA_SHORT_NAME\}\}/g, () => jsonToken(brand.config.brand.pwa.shortName))
+                .replace(/\{\{PWA_THEME_COLOR\}\}/g, () => jsonToken(brand.config.brand.pwa.themeColor))
+                .replace(/\{\{PWA_ICON_SVG\}\}/g, () => jsonToken(pwaIconDataUri()));
         }
         res.set("Content-Type", "application/manifest+json; charset=utf-8");
         res.send(renderedManifest);
