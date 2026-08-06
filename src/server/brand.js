@@ -208,9 +208,18 @@ if (typeof config.brand.pwa.iconLetter !== "string"
     fail("brand.pwa.iconLetter", "očekává právě jeden znak", config.brand.pwa.iconLetter);
 }
 
+// Finding M3: this value is spliced into sw.js (a JS source file) and into
+// config.js/manifest.json/every HTML page. A basePath containing a quote,
+// backtick, newline or "</script>"-shaped sequence could otherwise produce
+// a syntactically broken sw.js or break out of a template's context —
+// restricting to URL-path-safe characters up front closes that off, rather
+// than relying solely on downstream escaping.
+const BASE_PATH_RE = /^\/[A-Za-z0-9\-._~/]*$/;
 const basePath = config.server.basePath;
-if (typeof basePath !== "string" || !basePath.startsWith("/")) {
-    fail("server.basePath", "musí začínat lomítkem (např. \"/reservation\")", basePath);
+if (typeof basePath !== "string" || !BASE_PATH_RE.test(basePath)) {
+    fail("server.basePath",
+        "musí začínat lomítkem a obsahovat jen písmena, číslice, - . _ ~ / (např. \"/reservation\")",
+        basePath);
 }
 if (basePath.length > 1 && basePath.endsWith("/")) {
     fail("server.basePath", "nesmí končit lomítkem", basePath);

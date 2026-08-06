@@ -145,7 +145,13 @@ const SERVER_CONFIG = {
         // EET_ENABLED=true is left in its .env.
         enabled: brand.isEnabled("eet") && process.env.EET_ENABLED === "true",
         playground: process.env.EET_PLAYGROUND !== "false", // safe default
-        eic: process.env.EET_EIC || process.env.BUSINESS_DIC || "",
+        // Same fallback chain as business.* above (finding I3): EET_EIC wins
+        // when set, then the legacy BUSINESS_DIC env var, then the config
+        // file's business.dic — so an install that only sets the DIČ via
+        // restaurace.config.js (as .env.example now directs) still reports
+        // a real taxpayer id instead of silently submitting every sale with
+        // eic_popl blank.
+        eic: process.env.EET_EIC || process.env.BUSINESS_DIC || brand.config.business.dic || "",
         idJednotky: process.env.EET_ID_JEDNOTKY || "",
         certPem: process.env.EET_CERT_PEM || "./secrets/eet-cert.pem",
         keyPem: process.env.EET_KEY_PEM || "./secrets/eet-key.pem",
@@ -2621,6 +2627,10 @@ function setupMiddleware() {
         name: brand.config.brand.name,
         wordmark: brand.config.brand.wordmark,
     });
+    // Finding C2: window.APP_BASE_PATH is what lets every frontend script
+    // build its API_URL from the CONFIGURED base path instead of a
+    // hardcoded "/reservation" — see the six JS files that read it.
+    const appBasePathJson = JSON.stringify(base || "");
 
     let renderedConfigJs = null;
     const configJsRoute = async (req, res) => {
@@ -2628,7 +2638,7 @@ function setupMiddleware() {
             const rawJs = await loadHtmlTemplate("config.js");
             if (rawJs == null) return res.status(404).send("// config.js not found");
             // JSON literals, not HTML — brand.renderTokens would escape the
-            // quotes into &quot; and produce a syntax error, so these two
+            // quotes into &quot; and produce a syntax error, so these
             // tokens are substituted directly.
             //
             // SECURITY: the replacement must be a FUNCTION, not a string.
@@ -2641,7 +2651,8 @@ function setupMiddleware() {
             // Same pattern as brand.renderTokens / renderPage above.
             renderedConfigJs = rawJs
                 .replace(/\{\{APP_FEATURES_JSON\}\}/g, () => featuresJson)
-                .replace(/\{\{APP_BRAND_JSON\}\}/g, () => appBrandJson);
+                .replace(/\{\{APP_BRAND_JSON\}\}/g, () => appBrandJson)
+                .replace(/\{\{APP_BASE_PATH_JSON\}\}/g, () => appBasePathJson);
         }
         res.set("Content-Type", "application/javascript; charset=utf-8");
         res.set("Cache-Control", "no-cache");
@@ -2687,8 +2698,17 @@ function setupMiddleware() {
     // un-rendered page (literal "{{WORDMARK}}" on screen) would be
     // reachable at .../html/<file> alongside the real rendered route.
     // Registered before express.static, so it wins.
+    //
+    // inner.html is deliberately EXCLUDED from this list (finding C1): both
+    // src/sw.js's SHELL_ASSETS and src/manifest.json's start_url depend on
+    // `${BASE}/html/inner.html` being a real, fetchable, rendered page —
+    // sw.js's cache.addAll() is all-or-nothing, so blocking that one path
+    // used to fail the ENTIRE offline precache (silently — logged only as
+    // "[sw] shell precache failed") and 404 an already-installed PWA's
+    // start_url. It gets its own explicit route below instead, registered
+    // here (before express.static) so the raw template still can never leak.
     const templateFileNames = [
-        "index.html", "inner.html", "delivery.html", "driver.html",
+        "index.html", "delivery.html", "driver.html",
         "kitchen.html", "table.html",
         "obchodni-podminky.html", "ochrana-osobnich-udaju.html", "reklamace.html",
     ];
@@ -2780,9 +2800,16 @@ function setupMiddleware() {
         try {
             const source = await fs.readFile(path.join(frontendPath, "sw.js"), "utf8");
             const version = await computeShellVersion();
+            // SECURITY (finding M3): function replacer, not a string — same
+            // reasoning as configJsRoute/manifestRoute above. __BASE_PATH__
+            // now carries a config-derived value (server.basePath) rather
+            // than a hardcoded constant, so it can no longer be assumed free
+            // of $$, $`, $', $& — those would otherwise be reinterpreted as
+            // replacement-pattern syntax by the string form and could
+            // produce a syntactically broken sw.js.
             const body = source
-                .replace(/__SHELL_VERSION__/g, version)
-                .replace(/__BASE_PATH__/g, base || "");
+                .replace(/__SHELL_VERSION__/g, () => version)
+                .replace(/__BASE_PATH__/g, () => base || "");
             res.set("Content-Type", "application/javascript; charset=utf-8");
             // no-store, not no-cache: the browser must re-fetch this script
             // on every update check, or a broken worker becomes permanent.
@@ -2803,6 +2830,10 @@ function setupMiddleware() {
         for (const filename of templateFileNames) {
             app.get(`${base}/html/${filename}`, blockRawTemplate);
         }
+        // See the C1 comment on templateFileNames above: this must render,
+        // not 404, and must be registered before express.static so the raw
+        // template on disk is never what answers this path.
+        app.get(`${base}/html/inner.html`, innerHtmlRoute);
         app.use(`${base}/server`, blockServerSource);
         app.get(`${base}/config.js`, configJsRoute);
         app.get(`${base}/manifest.json`, manifestRoute);
@@ -2837,6 +2868,8 @@ function setupMiddleware() {
         for (const filename of templateFileNames) {
             app.get(`/html/${filename}`, blockRawTemplate);
         }
+        // See the C1 comment on templateFileNames above.
+        app.get(`/html/inner.html`, innerHtmlRoute);
         app.use("/server", blockServerSource);
         app.get(`/config.js`, configJsRoute);
         app.get(`/manifest.json`, manifestRoute);
@@ -3242,7 +3275,13 @@ function setupAPIRoutes() {
     //   - smsIpLimiter:    caps how many send-code requests one IP can fire
     //   - smsPhoneLimiter: caps how many codes one phone number can receive
     //                      per hour, regardless of which IP(s) requested them
-    app.post(`${api}/reservations/send-code`, security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.sendCodeSchema), async (req, res) => {
+    // Finding I2: reservations:false must 404 the reservation API too, not
+    // just the /app page — without this, send-code still spends real Twilio
+    // SMS money and verify-and-book still writes real bookings even though
+    // the feature this installation didn't buy has no page to reach them
+    // from. requireFeature FIRST, before rate limiters/csrf/validation,
+    // matching every other gated route in this file.
+    app.post(`${api}/reservations/send-code`, requireFeature("reservations"), security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.sendCodeSchema), async (req, res) => {
         const { phone, tableName, dateStr, dayIndex, startHour, duration, guestName, order, orderTotal, guests } = req.body || {};
 
         // SECURITY: dayIndex/startHour/duration are already type/range-
@@ -3350,7 +3389,8 @@ function setupAPIRoutes() {
         }
     });
 
-    app.post(`${api}/reservations/verify-and-book`, V.validate(V.verifyAndBookSchema), async (req, res) => {
+    // Finding I2: same reasoning as send-code above.
+    app.post(`${api}/reservations/verify-and-book`, requireFeature("reservations"), V.validate(V.verifyAndBookSchema), async (req, res) => {
         const { phone, code } = req.body || {};
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return res.status(400).json({ error: "Chybí telefon nebo kód" });

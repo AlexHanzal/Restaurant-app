@@ -142,6 +142,12 @@ const BAD = [
     ["brand.pwa.iconLetter", `module.exports = { brand: { pwa: { iconLetter: "abc" } } };`],
     ["server.basePath", `module.exports = { server: { basePath: "reservation" } };`],
     ["server.basePath", `module.exports = { server: { basePath: "/reservation/" } };`],
+    // Finding M3: basePath is spliced into sw.js (a JS source file) via a
+    // regex replace, and into every HTML page/config.js/manifest.json. A
+    // value containing a quote or newline must be rejected up front rather
+    // than relying solely on the downstream function-replacer to keep it
+    // from producing a syntactically broken sw.js.
+    ["server.basePath", `module.exports = { server: { basePath: "/foo\\"; alert(1); //" } };`],
     ["business.ico", `module.exports = { business: { ico: "123" } };`],
     ["business.dic", `module.exports = { business: { dic: "12345678" } };`],
     ["business.termsEffectiveDate", `module.exports = { business: { termsEffectiveDate: "1. 9. 2026" } };`],
