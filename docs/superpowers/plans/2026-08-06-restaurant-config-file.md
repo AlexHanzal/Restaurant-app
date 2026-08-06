@@ -59,7 +59,7 @@ Task 1 builds `brand.js` standalone with unit tests — nothing else depends on 
   - `brand.isEnabled(name: string): boolean`
   - `brand.tokenValues(): { [token: string]: string }`
   - `brand.renderTokens(rawHtml: string, extraTokens?: object): string`
-  - `brand.RAW_TOKENS: Set<string>` — tokens inserted without HTML escaping.
+  - `brand.isRawToken(name: string): boolean` — true for tokens inserted without HTML escaping (currently only `BRAND_STYLE`).
   - `brand.CONFIG_PATH: string` — resolved absolute path that was attempted.
   - `brand.loaded: boolean` — whether a config file was actually found.
 
