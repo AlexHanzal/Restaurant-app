@@ -27,3 +27,7 @@ node_modules/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# Per-restaurant config — one per customer, never shared.
+# The committed template is restaurace.config.example.js.
+restaurace.config.js

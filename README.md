@@ -42,6 +42,23 @@ hash at cost 12 (the shape is `{ id, abbreviation, password, name, isAdmin,
 isDriver }` — see `src/server/auth.js` and the `seedAdminUser` helper in
 `tests/smoke/table-orders.test.js` for a working example).
 
+## Nasazení pro další restauraci
+
+Všechno, co se liší restauraci od restaurace, je v jednom souboru:
+
+```bash
+cp restaurace.config.example.js restaurace.config.js
+```
+
+Vyplň ho (název, barvy, IČO, co si zákazník koupil, výchozí ceny za rozvoz)
+a restartuj server. Soubor je okomentovaný a na konci má seznam šesti věcí,
+které se musí udělat ručně — vytvořit přihlášení, naimportovat menu, nakreslit
+rozložení stolů a tak dál.
+
+Hesla a klíče do něj nepatří — ty zůstávají v `.env` (vzor v `.env.example`).
+
+Když soubor neexistuje, aplikace jede na výchozích hodnotách.
+
 ## Production
 
 Set `TZ` (see `.env.example`). It defaults to `Europe/Prague`, which is what
