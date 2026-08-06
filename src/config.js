@@ -59,3 +59,22 @@ if (window.fetch) {
             console.log('🔧 Please check your API_BASE_URL configuration');
         });
 }
+
+// ============================================================================
+// PER-RESTAURANT CONFIG (server-rendered)
+// ============================================================================
+// The {{TOKEN}} values below are substituted by server.js before this file
+// is sent — see src/server/brand.js. This file is NOT loaded from disk by
+// the browser as-is; it always goes through the render route.
+//
+// Why a served file instead of an inline <script>: the CSP is
+// script-src 'self' with no 'unsafe-inline', so an inline block carrying
+// these values would be blocked. Same reason sw.js gets its __BASE_PATH__
+// substituted server-side.
+//
+// window.* rather than top-level const: classic <script> tags share ONE
+// global lexical environment, so a top-level `const APP_FEATURES` here
+// would collide with any same-named declaration in renderer.js/inner.js and
+// silently kill whichever file loaded second.
+window.APP_FEATURES = {{APP_FEATURES_JSON}};
+window.APP_BRAND = {{APP_BRAND_JSON}};

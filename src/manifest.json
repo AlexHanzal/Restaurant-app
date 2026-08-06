@@ -1,16 +1,16 @@
 {
-  "name": "Pokladna — restaurace",
-  "short_name": "Pokladna",
+  "name": "{{PWA_NAME}}",
+  "short_name": "{{PWA_SHORT_NAME}}",
   "description": "Obsluha stolů a účtenek, funguje i bez připojení k internetu.",
   "start_url": "html/inner.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#111111",
-  "theme_color": "#111111",
+  "background_color": "{{PWA_THEME_COLOR}}",
+  "theme_color": "{{PWA_THEME_COLOR}}",
   "icons": [
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='96' fill='%23111'/%3E%3Ctext x='256' y='340' font-size='260' text-anchor='middle' fill='%23fff' font-family='sans-serif'%3E%C4%8D%3C/text%3E%3C/svg%3E",
+      "src": "{{PWA_ICON_SVG}}",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

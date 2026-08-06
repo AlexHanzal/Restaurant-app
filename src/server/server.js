@@ -2560,6 +2560,66 @@ function setupMiddleware() {
         "/reklamace": makePageRoute("reklamace.html"),
     };
 
+    // config.js and manifest.json are {{TOKEN}} templates like the HTML
+    // pages, but they are not HTML — so they get their own routes with
+    // their own Content-Type, mounted BEFORE the minify middleware (which
+    // otherwise claims every .js) and before express.static (which
+    // otherwise claims manifest.json). Both are rendered once at boot: the
+    // tokens they use all come from brand.js, which is fixed for the
+    // process lifetime — unlike the HTML pages, which also carry
+    // settings-derived business tokens that can change at runtime.
+    const featuresJson = JSON.stringify(brand.config.features);
+    const appBrandJson = JSON.stringify({
+        name: brand.config.brand.name,
+        wordmark: brand.config.brand.wordmark,
+    });
+
+    let renderedConfigJs = null;
+    const configJsRoute = async (req, res) => {
+        if (renderedConfigJs == null) {
+            const rawJs = await loadHtmlTemplate("config.js");
+            if (rawJs == null) return res.status(404).send("// config.js not found");
+            // JSON literals, not HTML — brand.renderTokens would escape the
+            // quotes into &quot; and produce a syntax error, so these two
+            // tokens are substituted directly.
+            renderedConfigJs = rawJs
+                .replace(/\{\{APP_FEATURES_JSON\}\}/g, featuresJson)
+                .replace(/\{\{APP_BRAND_JSON\}\}/g, appBrandJson);
+        }
+        res.set("Content-Type", "application/javascript; charset=utf-8");
+        res.set("Cache-Control", "no-cache");
+        res.send(renderedConfigJs);
+    };
+
+    // The PWA icon is a data: URI holding an SVG with one letter in it, so
+    // the letter has to be percent-encoded into the URI rather than dropped
+    // in as a token — hence building the whole src here.
+    function pwaIconDataUri() {
+        const letter = brand.config.brand.pwa.iconLetter;
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">`
+            + `<rect width="512" height="512" rx="96" fill="${brand.config.brand.pwa.themeColor}"/>`
+            + `<text x="256" y="340" font-size="260" text-anchor="middle" fill="#fff" `
+            + `font-family="sans-serif">${letter}</text></svg>`;
+        return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+    }
+
+    let renderedManifest = null;
+    const manifestRoute = async (req, res) => {
+        if (renderedManifest == null) {
+            const rawJson = await loadHtmlTemplate("manifest.json");
+            if (rawJson == null) return res.status(404).json({ error: "manifest not found" });
+            // JSON string values, so escape for JSON rather than for HTML.
+            const jsonToken = (value) => JSON.stringify(String(value)).slice(1, -1);
+            renderedManifest = rawJson
+                .replace(/\{\{PWA_NAME\}\}/g, jsonToken(brand.config.brand.pwa.name))
+                .replace(/\{\{PWA_SHORT_NAME\}\}/g, jsonToken(brand.config.brand.pwa.shortName))
+                .replace(/\{\{PWA_THEME_COLOR\}\}/g, jsonToken(brand.config.brand.pwa.themeColor))
+                .replace(/\{\{PWA_ICON_SVG\}\}/g, jsonToken(pwaIconDataUri()));
+        }
+        res.set("Content-Type", "application/manifest+json; charset=utf-8");
+        res.send(renderedManifest);
+    };
+
     // Every page is now a {{TOKEN}} template, and src/html/ is served
     // wholesale by express.static below — so without this block the RAW,
     // un-rendered page (literal "{{WORDMARK}}" on screen) would be
@@ -2682,6 +2742,8 @@ function setupMiddleware() {
             app.get(`${base}/html/${filename}`, blockRawTemplate);
         }
         app.use(`${base}/server`, blockServerSource);
+        app.get(`${base}/config.js`, configJsRoute);
+        app.get(`${base}/manifest.json`, manifestRoute);
         // Minify-on-serve (design §2) MUST be mounted before express.static
         // so it wins for .js/.css — it falls through to next() (i.e. this
         // express.static call) on anything it can't/shouldn't handle itself
@@ -2703,6 +2765,8 @@ function setupMiddleware() {
             app.get(`/html/${filename}`, blockRawTemplate);
         }
         app.use("/server", blockServerSource);
+        app.get(`/config.js`, configJsRoute);
+        app.get(`/manifest.json`, manifestRoute);
         app.use(minify.createMinifyMiddleware(frontendPath));
         app.use(express.static(frontendPath, staticOptions));
         app.get("/app", indexHtmlRoute);
