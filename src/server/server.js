@@ -180,6 +180,9 @@ const smscap = require("./smscap");
 // Signed per-table capability tokens for the customer QR self-order page —
 // see table-token.js's header for why this is NOT auth.js's JWT_SECRET.
 const tableToken = require("./table-token");
+// Shared with brand.js — see html-escape.js's header for why this moved out
+// of this file instead of being copied.
+const { escapeHtml } = require("./html-escape");
 const {
     hashPassword,
     comparePassword,
@@ -1676,12 +1679,6 @@ async function sendEetForReceipt(receiptId) {
         // stuck receipt is a guaranteed compliance failure.
         eetSendsInFlight.delete(receiptId);
     }
-}
-
-function escapeHtml(str) {
-    return String(str == null ? "" : str).replace(/[&<>"']/g, ch => ({
-        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    }[ch]));
 }
 
 function formatCzk(amount) {
