@@ -129,6 +129,11 @@ o zbytku aplikace.
 Odpovědnost:
 
 1. `require()` konfiguračního souboru; když neexistuje, prázdný objekt.
+   Cesta je `<cwd>/restaurace.config.js`, přebitelná proměnnou
+   **`RESTAURANT_CONFIG`** (absolutní cesta). Ta existuje kvůli smoke testům —
+   harness spouští server s `cwd` = kořen repozitáře, takže bez přepínače by
+   test musel zapisovat konfigurační soubor do skutečného repozitáře. Hodí se
+   i v provozu, když jeden stroj hostí víc instancí.
 2. Hloubkový merge přes vestavěné výchozí hodnoty (= dnešní chování) pomocí
    `mergeDefaults()`, které `settings.js` už má. Starší config soubor,
    kterému chybí nově přidaný klíč, tak funguje dál.
