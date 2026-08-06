@@ -178,6 +178,40 @@ test("features: dailyMenu off 404s its API route", async (t) => {
     assert.strictEqual(res.status, 404, "GET /api/daily-menu must 404 when dailyMenu is off");
 });
 
+// Finding I2: reservations:false used to gate the /app page but NOT the
+// underlying API — send-code would still fire a real Twilio SMS and
+// verify-and-book would still write a real booking. requireFeature must be
+// the first middleware on both routes, same as every other gated route.
+test("features: reservations off 404s the reservation API, not just the page", async (t) => {
+    const configPath = writeTempConfig(`module.exports = {
+        brand: { wordmark: "U Kalicha", name: "Restaurace U Kalicha" },
+        features: { reservations: false, delivery: true, tableOrdering: true,
+                    pos: true, dailyMenu: true, eet: false },
+    };`);
+
+    const server = await harness.start({ env: { RESTAURANT_CONFIG: configPath } });
+    t.after(async () => {
+        await server.stop();
+        try { fs.unlinkSync(configPath); } catch { /* already gone */ }
+    });
+
+    const sendCode = await fetch(`${server.api}/reservations/send-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+    });
+    assert.strictEqual(sendCode.status, 404,
+        "POST /api/reservations/send-code must 404 (not proceed to send SMS) when reservations is off");
+
+    const verifyAndBook = await fetch(`${server.api}/reservations/verify-and-book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+    });
+    assert.strictEqual(verifyAndBook.status, 404,
+        "POST /api/reservations/verify-and-book must 404 when reservations is off");
+});
+
 test("seeding: a fresh DB takes its starting values from the config file", async (t) => {
     const configPath = writeTempConfig(`module.exports = {
         defaults: {
