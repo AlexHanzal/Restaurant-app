@@ -76,7 +76,18 @@ test("a missing or malformed window falls back to the default rather than droppi
     assert.deepStrictEqual(ids(board.filterForBoard(rows, { now: NOW })), ["recent"]);
     assert.deepStrictEqual(ids(board.filterForBoard(rows, { now: NOW, windowDays: 0 })), ["recent"]);
     assert.deepStrictEqual(ids(board.filterForBoard(rows, { now: NOW, windowDays: -5 })), ["recent"]);
-    assert.deepStrictEqual(ids(board.filterForBoard(rows, {})), ["recent"]);
+
+    // `{}` omits `now` as well, so this assertion runs against the REAL
+    // clock — its row therefore has to be recent in real time, not merely
+    // recent relative to the frozen NOW above. Using `rows` here was a time
+    // bomb: it passed until the real date drifted more than the default
+    // window past 2026-08-05, then failed every day thereafter.
+    const liveRow = [{
+        id: "recent",
+        kitchenStatus: "completed",
+        createdAt: new Date().toISOString(),
+    }];
+    assert.deepStrictEqual(ids(board.filterForBoard(liveRow, {})), ["recent"]);
 });
 
 test("a non-array input yields an empty list instead of throwing", () => {
