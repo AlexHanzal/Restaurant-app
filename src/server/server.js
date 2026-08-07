@@ -26,6 +26,8 @@ const { TIMEZONE } = require("./timezone");
 // that used to be hardcoded right here, so this require changes nothing for
 // an installation that has no restaurace.config.js.
 const brand = require("./brand");
+// Startup guard + boot summary for the "one box, N processes" deployment.
+const preflight = require("./preflight");
 
 const SERVER_CONFIG = {
     port: process.env.PORT || 3000,
@@ -5327,7 +5329,20 @@ async function eetRetryWorkerTick() {
 // ============================================================================
 
 async function start() {
-    console.log("Starting server...");
+    // Refuse to boot a misconfigured instance BEFORE anything opens the
+    // database or writes a file (initializeData below is the first thing
+    // that does). In the "one box, N processes" deployment a forgotten
+    // SQLITE_PATH silently merges two restaurants into one database, and a
+    // forgotten EET path files sales under another restaurant's certificate
+    // — see preflight.js for the full list. Opt-in: only a process that
+    // declares RESTAURANT_INSTANCE is held to this.
+    const guard = preflight.checkInstance(process.env);
+    if (!guard.ok) {
+        console.error("Chyba v nastavení instance restaurace — server se nespustí:");
+        for (const message of guard.errors) console.error(`  • ${message}`);
+        console.error("Oprav proměnné prostředí (systemd EnvironmentFile) a spusť znovu.");
+        process.exit(1);
+    }
 
     await initializeData();
 
@@ -5442,10 +5457,26 @@ async function start() {
         }
     }, 25 * 1000).unref();
 
-    console.log("💾 SQLite database:", db.DB_PATH);
-
     app.listen(SERVER_CONFIG.port, "0.0.0.0", () => {
-        console.log("Server running on port", SERVER_CONFIG.port);
+        // One identifying block per process. With a dozen restaurants writing
+        // into one systemd journal, "Server running on port 4001" says
+        // nothing — and this is the first thing anyone reads when a customer
+        // phones in, so it reports the configuration that actually took
+        // effect rather than the one that was intended.
+        const summary = preflight.buildBootSummary({
+            instance: process.env.RESTAURANT_INSTANCE || "",
+            brandName: brand.config.brand.name,
+            basePath: SERVER_CONFIG.basePath,
+            port: SERVER_CONFIG.port,
+            dbPath: db.DB_PATH,
+            configPath: brand.CONFIG_PATH,
+            configLoaded: brand.loaded,
+            features: brand.config.features,
+            eetEnabled: SERVER_CONFIG.eet.enabled,
+            eetPlayground: SERVER_CONFIG.eet.playground,
+            timezone: TIMEZONE,
+        });
+        for (const line of summary) console.log(line);
     });
 }
 
