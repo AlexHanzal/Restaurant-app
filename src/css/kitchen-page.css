@@ -223,3 +223,11 @@ html, body {
     border-radius: .35rem; font-size: .82rem; font-weight: 600;
 }
 .kit-batch-band__count { font-weight: 500; opacity: .8; }
+.kit-batch-band__right { display: flex; align-items: center; gap: .5rem; }
+.kit-batch-band__split {
+    font: inherit; font-size: .78rem; font-weight: 600;
+    padding: .1rem .45rem; cursor: pointer;
+    color: inherit; background: transparent;
+    border: 1px solid currentColor; border-radius: .3rem; opacity: .65;
+}
+.kit-batch-band__split:hover { opacity: 1; }

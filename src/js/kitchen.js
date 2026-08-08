@@ -381,11 +381,41 @@ function renderDeliveryCard(order) {
         card.insertAdjacentHTML('afterbegin', `
             <div class="kit-batch-band">
                 <span>🔗 Skupina · připravit společně</span>
-                <span class="kit-batch-band__count">${ready} ze ${siblings.length} hotovo</span>
+                <span class="kit-batch-band__right">
+                    <span class="kit-batch-band__count">${ready} ze ${siblings.length} hotovo</span>
+                    <button type="button" class="kit-batch-band__split" title="Rozdělit skupinu">Rozdělit</button>
+                </span>
             </div>`);
+        // The kitchen is where a bad batch shows up first — they are the ones
+        // being told to cook these together — so the escape hatch lives here
+        // as well as on the driver's card (design §8.5, §11).
+        card.querySelector('.kit-batch-band__split')
+            .addEventListener('click', () => splitDeliveryBatch(order.batchId));
     }
 
     return card;
+}
+
+// Break a batch apart. The orders themselves are untouched — they just stop
+// being grouped, and each goes out on its own trip. Refused server-side once
+// a driver has claimed the batch, which is why the 409 gets its own message
+// rather than the generic failure one.
+async function splitDeliveryBatch(batchId) {
+    if (!confirm('Rozdělit tuto skupinu? Objednávky pojedou samostatně.')) return;
+    try {
+        const res = await apiFetch(`${API_URL}/delivery-batches/${batchId}/split`, { method: 'POST' });
+        if (res.status === 409) {
+            showToast('Skupinu už nelze rozdělit — převzal ji řidič.', true);
+        } else if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        } else {
+            showToast('Skupina rozdělena');
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Nepodařilo se rozdělit skupinu', true);
+    }
+    await fetchBoard();
 }
 
 // ── ACTIONS ──────────────────────────────────────────────────────────────
