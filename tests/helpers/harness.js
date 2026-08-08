@@ -66,6 +66,8 @@ const COL = {
     settings: "settings",
     payments: "payments",
     orders: "orders",
+    // Delivery routing/batching (spec 2026-08-08) — see server.js's COL.deliveryBatches.
+    deliveryBatches: "delivery_batches",
 };
 const MENU_SINGLETON_ID = "singleton";
 const SETTINGS_ID = "restaurant";
@@ -181,6 +183,8 @@ async function start(opts = {}) {
         GOPAY_SANDBOX: "",
         GOPAY_RETURN_URL: "",
         GOPAY_NOTIFICATION_URL: "",
+        // Delivery routing: no test run may ever reach OpenStreetMap.
+        GEOCODE_DISABLED: "1",
 
         ...(opts.env || {}),
     };
