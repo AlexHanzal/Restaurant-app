@@ -197,17 +197,69 @@ document.getElementById('loginPasswordInput').addEventListener('keypress', e => 
 document.getElementById('logoutBtn').addEventListener('click', logout);
 
 // ── ORDERS ───────────────────────────────────────────────────────────────
+// Route planning replaces the old flat GET /orders list. The server ranks
+// (and, where the settings allow it, batches) pending orders by distance
+// from the driver — or from the restaurant, if the driver hasn't shared
+// their position yet — and returns the plan alongside the raw order records
+// so renderOrderCard() (unchanged) still has everything it needs.
+
+// `plan` is the server's routing verdict: which orders form batches, which
+// are ranked singles, and which have no known location yet ("unlocated").
+// `orders` (declared above, used by renderOrderCard) is kept in sync from
+// `plan.orders` on every fetch.
+let plan = { enabled: false, items: [], unlocated: [], orders: [] };
+// Set only after the driver taps "Použít polohu" — see requestPosition().
+// Until then every request carries no coordinates and the server ranks
+// from the restaurant's own location instead.
+let driverPosition = null; // {lat, lon}
 
 async function fetchOrders() {
     try {
-        const res = await apiFetch(`${API_URL}/orders`);
+        // POST, not GET: the body carries the driver's live GPS coordinates
+        // once known, and location data has no business in a query string —
+        // it would otherwise end up in access logs and proxy caches.
+        const res = await apiFetch(`${API_URL}/driver/route`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(driverPosition || {}),
+        });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        orders = await res.json();
+        plan = await res.json();
+        orders = plan.orders || [];
         renderOrders();
     } catch (e) {
-        console.error('Failed to load orders:', e);
+        console.error('Failed to load route:', e);
     }
 }
+
+// Geolocation sits behind this explicit button tap (see driver.html's
+// #useLocationBtn), never behind an unprompted permission dialog on page
+// load — a prompt nobody asked for is a prompt that gets permanently
+// denied, and then the driver never gets a second chance to opt in.
+//
+// Also note: browsers refuse navigator.geolocation outright on plain HTTP
+// origins outside localhost (no dialog, just an immediate error callback).
+// That is handled below by the error callback showing a toast and simply
+// leaving driverPosition unset — fetchOrders() then keeps asking the server
+// to rank from the restaurant's location instead, so the page still works,
+// it just doesn't personalize the ranking.
+function requestPosition() {
+    if (!navigator.geolocation) {
+        showToast('Tento prohlížeč neumí zjistit polohu.', true);
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        pos => {
+            driverPosition = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            showToast('Trasa seřazena podle vaší polohy.');
+            fetchOrders();
+        },
+        () => showToast('Polohu se nepodařilo zjistit — řadím od restaurace.', true),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+}
+
+document.getElementById('useLocationBtn').addEventListener('click', requestPosition);
 
 function startPolling() {
     fetchOrders();
@@ -270,21 +322,152 @@ function stopBoardStream() {
     }
 }
 
+// Renders three tiers, top to bottom: this driver's own already-claimed
+// orders (unchanged behaviour), then the server's ranked plan (batches and
+// ranked singles), then the "unlocated" tail — orders the plan couldn't
+// place because there's no known address for them yet, or (see the
+// plan.enabled guard below) because routing is switched off entirely.
 function renderOrders() {
     const container = document.getElementById('ordersList');
     container.innerHTML = '';
+    const byId = new Map(orders.map(o => [o.id, o]));
 
-    // Same visibility rule the old "available" + "mine" tabs enforced
-    // together: an order this driver can act on (still unclaimed) or
-    // already claimed by them. Another driver's claimed order never shows.
-    const visible = orders.filter(o => o.status === 'pending' || o.claimedBy === currentDriver?.id);
+    // Orders this driver already claimed stay at the top, unchanged — same
+    // card, same privacy boundary (another driver's claim is never shown).
+    const mine = orders.filter(o => o.claimedBy === currentDriver?.id);
+    mine.forEach(o => container.appendChild(renderOrderCard(o)));
 
-    if (visible.length === 0) {
-        container.innerHTML = '<div class="ds-empty drv-empty-wrap">Momentálně nemáte žádné rozvozy.</div>';
-        return;
+    for (const item of plan.items || []) {
+        if (item.kind === 'batch') {
+            container.appendChild(renderBatchCard(item, byId));
+        } else {
+            const order = byId.get(item.stopIds[0]);
+            if (order && order.claimedBy !== currentDriver?.id) container.appendChild(renderOrderCard(order));
+        }
     }
 
-    visible.forEach(order => container.appendChild(renderOrderCard(order)));
+    for (const id of plan.unlocated || []) {
+        const order = byId.get(id);
+        if (!order || order.claimedBy === currentDriver?.id) continue;
+        const card = renderOrderCard(order);
+        // When routing is switched off in settings (plan.enabled === false),
+        // EVERY pending order arrives here — that is the deliberate
+        // degrade-to-old-behaviour path, not a geocoding failure, and
+        // badging all of them "poloha neznámá" would be a lie. Badge only
+        // when the feature is genuinely on and this specific address
+        // failed to geocode.
+        if (plan.enabled) {
+            card.classList.add('drv-order--unlocated');
+            card.insertAdjacentHTML('afterbegin',
+                '<div class="drv-order__badge-unlocated">📍 poloha neznámá</div>');
+        }
+        container.appendChild(card);
+    }
+
+    if (!container.children.length) {
+        container.innerHTML = '<div class="ds-empty drv-empty-wrap">Momentálně nemáte žádné rozvozy.</div>';
+    }
+}
+
+// One card per batch — several stops, one claim button. Each stop lists its
+// own customer/price/address/kitchen-status line so the driver can see the
+// whole trip before committing to it; renderOrderCard (unchanged) is not
+// reused here because a batch stop needs the ordinal number and doesn't get
+// its own claim/pay buttons — only the batch as a whole does.
+function renderBatchCard(item, byId) {
+    const stops = item.stopIds.map(id => byId.get(id)).filter(Boolean);
+    const card = document.createElement('div');
+    card.className = 'ds-card drv-batch' + (item.claimable ? '' : ' drv-batch--waiting');
+
+    const stopsHtml = stops.map((o, i) => `
+        <div class="drv-batch__stop">
+            <span class="drv-batch__stop-num">${i + 1}</span>
+            <div class="drv-batch__stop-body">
+                <div class="drv-batch__stop-name">${escapeHtml(o.customerName)} · ${formatPrice(o.total)}</div>
+                <div class="drv-batch__stop-addr">${escapeHtml(o.address)}${o.psc ? ` (PSČ ${escapeHtml(o.psc)})` : ''}</div>
+                ${o.kitchenStatus === 'completed' ? '' : '<div class="drv-batch__stop-wait">⏳ čeká v kuchyni…</div>'}
+            </div>
+            ${o.phone ? `<a class="ds-btn ds-btn--ghost drv-batch__call" href="tel:${escapeHtmlAttr(o.phone)}">📞</a>` : ''}
+        </div>`).join('');
+
+    card.innerHTML = `
+        <div class="drv-batch__head">
+            <span class="drv-batch__title">Skupina · ${stops.length} objednávky</span>
+            <span class="drv-batch__ready">${item.readyCount}/${item.totalCount} hotovo</span>
+        </div>
+        <div class="drv-batch__stops">${stopsHtml}</div>
+        <div class="drv-order__actions-row">
+            <a class="ds-btn ds-btn--ghost" href="${escapeHtmlAttr(multiStopMapsUrl(stops))}" target="_blank" rel="noopener noreferrer">🗺 Navigovat celou trasu</a>
+            <button type="button" class="ds-btn ds-btn--ghost drv-batch__split">Rozdělit</button>
+        </div>`;
+
+    card.querySelector('.drv-batch__split')
+        .addEventListener('click', () => splitBatch(item.batchId));
+
+    const claimBtn = document.createElement('button');
+    claimBtn.type = 'button';
+    claimBtn.className = 'ds-btn ds-btn--primary ds-btn--block';
+    claimBtn.textContent = item.claimable
+        ? `Vyzvednout skupinu (${stops.length})`
+        : `Čeká na kuchyni (${item.readyCount}/${item.totalCount})`;
+    claimBtn.disabled = !item.claimable;
+    claimBtn.addEventListener('click', () => claimBatch(item.batchId, claimBtn));
+    card.appendChild(claimBtn);
+
+    return card;
+}
+
+// Google Maps' multi-stop directions form: everything between origin and
+// the final destination rides as `waypoints`, in the exact order the
+// server's planBatch() computed — the driver never has to re-sequence it
+// themselves inside Maps.
+function multiStopMapsUrl(stops) {
+    const addrs = stops.map(o => o.address || '');
+    const destination = encodeURIComponent(addrs[addrs.length - 1]);
+    const waypoints = addrs.slice(0, -1).map(encodeURIComponent).join('|');
+    let url = `https://www.google.com/maps/dir/?api=1&destination=${destination}`;
+    if (waypoints) url += `&waypoints=${waypoints}`;
+    return url;
+}
+
+async function claimBatch(batchId, buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Přebírám…';
+    try {
+        const res = await apiFetch(`${API_URL}/orders/claim-batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ batchId }),
+        });
+        if (res.status === 409) {
+            const data = await res.json().catch(() => ({}));
+            showToast(data.error || 'Skupinu už převzal jiný řidič.', true);
+            await fetchOrders();
+            return;
+        }
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        showToast('Skupina převzata!');
+        await fetchOrders();
+    } catch (e) {
+        console.error(e);
+        showToast('Nepodařilo se převzít skupinu', true);
+        await fetchOrders();
+    }
+}
+
+// The safety valve for when the algorithm makes a bad call on a busy
+// night: members return to the pool as ranked singles. Allowed only while
+// the batch is still unclaimed — the server enforces that, this just
+// surfaces whatever it says.
+async function splitBatch(batchId) {
+    try {
+        const res = await apiFetch(`${API_URL}/delivery-batches/${batchId}/split`, { method: 'POST' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        showToast('Skupina rozdělena.');
+    } catch (e) {
+        showToast('Nepodařilo se rozdělit skupinu', true);
+    }
+    await fetchOrders();
 }
 
 function renderOrderCard(order) {

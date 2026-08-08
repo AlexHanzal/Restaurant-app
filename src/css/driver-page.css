@@ -176,3 +176,33 @@ html, body {
 }
 
 .drv-empty-wrap { padding: 8px 0; }
+
+/* ── Batched orders ───────────────────────────────────────────────────── */
+/* One card, numbered stops. The colored left border is the same signal the
+   kitchen board uses for a batch (see kitchen-page.css's .kit-batched), so
+   the same trip reads as the same object on both screens. */
+.drv-batch { border-left: 4px solid var(--ds-accent, #1a5c3a); }
+.drv-batch--waiting { opacity: .72; }
+.drv-batch__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .5rem; }
+.drv-batch__title { font-weight: 600; }
+.drv-batch__ready { font-size: .85rem; opacity: .75; }
+.drv-batch__stops { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .6rem; }
+.drv-batch__stop { display: flex; align-items: flex-start; gap: .55rem; }
+.drv-batch__stop-num {
+    flex: 0 0 1.5rem; height: 1.5rem; border-radius: 50%;
+    background: var(--ds-accent, #1a5c3a); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .8rem; font-weight: 700;
+}
+.drv-batch__stop-body { flex: 1 1 auto; min-width: 0; }
+.drv-batch__stop-name { font-weight: 600; }
+.drv-batch__stop-addr { font-size: .9rem; opacity: .8; }
+.drv-batch__stop-wait { font-size: .82rem; opacity: .7; }
+.drv-batch__call { flex: 0 0 auto; padding: .2rem .5rem; }
+
+/* ── Unlocated tail ───────────────────────────────────────────────────── */
+/* Only ever shown when the routing feature is genuinely on and this
+   specific address failed to geocode — see renderOrders()'s plan.enabled
+   guard. Amber, not red: this is a "we don't know yet", not an error. */
+.drv-order--unlocated { border-left: 4px solid #b58900; }
+.drv-order__badge-unlocated { font-size: .82rem; color: #b58900; margin-bottom: .3rem; }
