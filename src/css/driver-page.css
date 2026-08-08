@@ -178,10 +178,14 @@ html, body {
 .drv-empty-wrap { padding: 8px 0; }
 
 /* ── Batched orders ───────────────────────────────────────────────────── */
-/* One card, numbered stops. The colored left border is the same signal the
-   kitchen board uses for a batch (see kitchen-page.css's .kit-batched), so
-   the same trip reads as the same object on both screens. */
-.drv-batch { border-left: 4px solid var(--ds-accent, #1a5c3a); }
+/* One card, numbered stops. Accented the way this page already accents a
+   card that belongs to you (.drv-order--mine above) — a whole-border colour
+   shift, not a side tab. The shared signal with the kitchen board is the
+   ACCENT COLOUR, not the border geometry: each screen keeps its own card
+   idiom (the kitchen recolours the left rule every ticket already has), so
+   the same trip still reads as the same object without importing a
+   decoration this page doesn't otherwise use. */
+.drv-batch { border-color: var(--ds-accent); }
 .drv-batch--waiting { opacity: .72; }
 .drv-batch__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .5rem; }
 .drv-batch__title { font-weight: 600; }
@@ -203,6 +207,8 @@ html, body {
 /* ── Unlocated tail ───────────────────────────────────────────────────── */
 /* Only ever shown when the routing feature is genuinely on and this
    specific address failed to geocode — see renderOrders()'s plan.enabled
-   guard. Amber, not red: this is a "we don't know yet", not an error. */
-.drv-order--unlocated { border-left: 4px solid #b58900; }
+   guard. Amber, not red: this is a "we don't know yet", not an error.
+   Same whole-border treatment as .drv-order--mine — the badge below carries
+   the actual message, so the border only needs to tint, not shout. */
+.drv-order--unlocated { border-color: #b58900; }
 .drv-order__badge-unlocated { font-size: .82rem; color: #b58900; margin-bottom: .3rem; }

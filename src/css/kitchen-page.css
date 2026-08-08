@@ -213,9 +213,12 @@ html, body {
     grid-column: 1 / -1;
 }
 
-/* Batched delivery orders: separate cards, visually tied. Same accent as
-   the driver page's batch card so it reads as one object in both places. */
-.kit-batched { border-left: 4px solid var(--ds-accent, #1a5c3a); }
+/* Batched delivery orders: separate cards, visually tied. Recolours the left
+   rule every .kit-ticket already carries (see its base rule above), exactly
+   as .kit-ticket--overdue does — this adds no new decoration to the board.
+   The accent is shared with the driver page's batch card so the same trip
+   reads as the same object on both screens. */
+.kit-batched { border-left-color: var(--ds-accent); }
 .kit-batch-band {
     display: flex; justify-content: space-between; align-items: center;
     gap: .5rem; margin: -.25rem -.25rem .5rem; padding: .3rem .55rem;
