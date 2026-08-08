@@ -252,6 +252,29 @@ function requireFeature(...names) {
     };
 }
 
+// SMS gate for the two send-code routes. Refuses up front when this
+// deployment cannot actually text anybody — see notify.smsMode().
+//
+// MOUNT ORDER MATTERS, and this must come BEFORE smsIpLimiter/smsPhoneLimiter
+// (and therefore before smscap.tryConsume() inside the handlers). Every one of
+// those is spent by simply reaching it: express-rate-limit counts the request
+// whether or not an SMS follows, and its counters cannot be refunded. A
+// deployment that can send nothing must burn nothing — otherwise a customer
+// who retries four times against a server with no Twilio credentials locks
+// their own number out for an hour, and the daily budget drains to zero on
+// sends that never happened. That was point 3 of the finding this closes.
+//
+// After requireFeature, though: a feature this installation didn't buy must
+// still 404 rather than announce itself with a 503.
+function requireSmsAvailable(req, res, next) {
+    if (notify.getSmsMode() !== "unavailable") return next();
+    // Deliberately the same wording as the daily-cap 503 below. Both mean the
+    // one thing the customer can act on — the code isn't coming, phone us —
+    // and telling the two apart from outside would only describe the server's
+    // configuration to someone who cannot use that information.
+    res.status(503).json({ error: "Ověřovací SMS momentálně nelze odeslat. Zkuste to prosím později nebo nám zavolejte." });
+}
+
 // Credentials are loaded once, lazily, and cached — reading and parsing PEM on
 // every sale would be pointless I/O on the payment hot path. Returns null when
 // EET is disabled or the certificate is absent, which is the dev-fallback
@@ -363,8 +386,21 @@ function generateCode(length) {
 async function sendVerificationSms(phone, code) {
     const message = `Váš ověřovací kód pro rezervaci: ${code} (platnost 5 minut).`;
     const result = await notify.sendSms(phone, message);
-    if (!result.ok) throw new Error(result.error || "SMS send failed");
+    if (!result.ok) throw smsSendError(result);
     return { simulated: result.simulated };
+}
+
+// "We will not do this" and "the send failed" are different answers to the
+// customer — 503 "phone us" vs 500 "check your number" — so the reason rides
+// on the Error rather than being flattened into a message string. In practice
+// requireSmsAvailable rejects the unavailable case before either send-code
+// handler runs; this is the belt to that pair of braces, and it also covers
+// the fire-and-forget notification callers that have no middleware in front
+// of them. Mirrors gopay.js's ONLINE_PAYMENTS_UNAVAILABLE.
+function smsSendError(result) {
+    const err = new Error(result.error || "SMS send failed");
+    if (result.code) err.code = result.code;
+    return err;
 }
 
 // Reorder feature (spec §7) needs its own verification SMS text — the
@@ -379,7 +415,7 @@ async function sendVerificationSms(phone, code) {
 async function sendReorderCodeSms(phone, code) {
     const message = `Váš ověřovací kód pro zobrazení vašich objednávek: ${code} (platnost 5 minut).`;
     const result = await notify.sendSms(phone, message);
-    if (!result.ok) throw new Error(result.error || "SMS send failed");
+    if (!result.ok) throw smsSendError(result);
     return { simulated: result.simulated };
 }
 
@@ -3298,7 +3334,7 @@ function setupAPIRoutes() {
     // the feature this installation didn't buy has no page to reach them
     // from. requireFeature FIRST, before rate limiters/csrf/validation,
     // matching every other gated route in this file.
-    app.post(`${api}/reservations/send-code`, requireFeature("reservations"), security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.sendCodeSchema), async (req, res) => {
+    app.post(`${api}/reservations/send-code`, requireFeature("reservations"), requireSmsAvailable, security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.sendCodeSchema), async (req, res) => {
         const { phone, tableName, dateStr, dayIndex, startHour, duration, guestName, order, orderTotal, guests } = req.body || {};
 
         // SECURITY: dayIndex/startHour/duration are already type/range-
@@ -3401,6 +3437,10 @@ function setupAPIRoutes() {
 
             res.json({ success: true, simulated: !!result.simulated });
         } catch (e) {
+            if (e.code === notify.SMS_UNAVAILABLE) {
+                console.error("Reservation code refused — SMS unavailable in production");
+                return res.status(503).json({ error: "Ověřovací SMS momentálně nelze odeslat. Zkuste to prosím později nebo nám zavolejte." });
+            }
             console.error("SMS send failed:", e.message);
             res.status(500).json({ error: "Nepodařilo se odeslat SMS. Zkontrolujte telefonní číslo." });
         }
@@ -3528,7 +3568,7 @@ function setupAPIRoutes() {
     // SMS budget, so this route can't be used to farm extra verification
     // codes, or to top up an SMS-bombing run against one phone number that
     // the reservation flow's own limiter would otherwise have capped.
-    app.post(`${api}/reorder/send-code`, requireFeature("delivery"), security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.reorderSendCodeSchema), async (req, res) => {
+    app.post(`${api}/reorder/send-code`, requireFeature("delivery"), requireSmsAvailable, security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.reorderSendCodeSchema), async (req, res) => {
         const { phone } = req.body || {};
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return res.status(400).json({ error: "Zadejte telefonní číslo" });
@@ -3568,6 +3608,10 @@ function setupAPIRoutes() {
             // fetched here), not just "remember to word the response the same".
             res.json({ success: true, simulated: !!result.simulated });
         } catch (e) {
+            if (e.code === notify.SMS_UNAVAILABLE) {
+                console.error("Reorder code refused — SMS unavailable in production");
+                return res.status(503).json({ error: "Ověřovací SMS momentálně nelze odeslat. Zkuste to prosím později nebo nám zavolejte." });
+            }
             console.error("Reorder SMS send failed:", e.message);
             res.status(500).json({ error: "Nepodařilo se odeslat SMS. Zkontrolujte telefonní číslo." });
         }

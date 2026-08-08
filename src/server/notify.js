@@ -40,6 +40,105 @@ const EMAIL_CONFIG = {
     from: process.env.SMTP_FROM || "",
 };
 
+// ── MAY THIS DEPLOYMENT FALL BACK? ──────────────────────────────────────────
+//
+// SECURITY / CORRECTNESS. The console fallback below exists so a laptop works
+// without a Twilio account: sendSms() prints the message — verification code
+// included — to stdout and reports success.
+//
+// On a public host that is a dead end wearing a success response. The customer
+// is shown "the code is in the server console", which they cannot read, so the
+// reservation and reorder flows reach the code-entry step and stop. Because
+// the fallback returned `{ ok: true }`, nothing upstream could tell: the route
+// answered 200, the global daily SMS budget (smscap) and the per-phone limiter
+// were both spent on a code that was never sent, and the code itself landed in
+// plaintext in a journal that gets pasted into chats and bug reports.
+//
+// This is the same hazard gopay.paymentMode() was written to close, and it
+// takes the same shape — with one extra input. THREE independent things put a
+// deployment on the fallback path, and all three look identical from outside:
+//
+//   - TWILIO_* not set (.env.example ships them empty, so this is the default
+//     state of a fresh deploy);
+//   - the `twilio` package not installed — the require() below is lazy, so a
+//     missing dependency degrades silently rather than failing at boot;
+//   - both.
+//
+// Hence `packageAvailable` alongside `configured`. Missing either one in
+// production must REFUSE, which is a materially different outcome from
+// simulating: an unavailable SMS is a customer told to phone the restaurant,
+// a simulated one is a customer stranded mid-booking holding a code that
+// exists only in a log file.
+//
+// Pure and exported so the decision is testable without standing up a server
+// or a Twilio account — see tests/unit/sms-mode.test.js.
+//
+//   "live"        — real Twilio call.
+//   "simulated"   — dev fallback, console-logged, no SMS sent.
+//   "unavailable" — refuse; callers surface it to the customer.
+function smsMode({ configured, packageAvailable, isProd }) {
+    if (configured && packageAvailable) return "live";
+    return isProd ? "unavailable" : "simulated";
+}
+
+// Same three states for e-mail, DELIBERATELY not the same consequence.
+// Confirmation e-mails are fire-and-forget alongside an order that has already
+// succeeded (see server.js's order route), so refusing buys the customer
+// nothing and risks a route that currently cannot fail. "unavailable" here
+// means only: sendEmail() reports `{ ok: false }` rather than claiming a
+// message was sent, and boot says so out loud. Nobody is made to wait.
+function emailMode({ configured, packageAvailable, isProd }) {
+    if (configured && packageAvailable) return "live";
+    return isProd ? "unavailable" : "simulated";
+}
+
+// `packageAvailable` must be answerable at BOOT — before any credentials
+// exist, and without side effects — because preflight.js asks it to decide
+// whether to let the process start. require.resolve() does exactly that: it
+// runs module resolution and throws MODULE_NOT_FOUND without executing the
+// package or constructing a client.
+function moduleIsInstalled(name) {
+    try {
+        require.resolve(name);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function smsPackageAvailable() {
+    return moduleIsInstalled("twilio");
+}
+
+function emailPackageAvailable() {
+    return moduleIsInstalled("nodemailer");
+}
+
+// The live answers, read from the actual environment. Kept separate from the
+// pure predicates above so the predicates stay testable.
+function getSmsMode() {
+    return smsMode({
+        configured: isSmsConfigured(),
+        packageAvailable: smsPackageAvailable(),
+        isProd: process.env.NODE_ENV === "production",
+    });
+}
+
+function getEmailMode() {
+    return emailMode({
+        configured: isEmailConfigured(),
+        packageAvailable: emailPackageAvailable(),
+        isProd: process.env.NODE_ENV === "production",
+    });
+}
+
+// Set on the `{ ok: false }` result (and on the Error that server.js's
+// sendVerificationSms turns it into) when the refusal is "we will not do
+// this", not "the send failed" — so route handlers can answer 503 with
+// "phone us" rather than 500 "check your number", exactly as the pay-online
+// routes distinguish ONLINE_PAYMENTS_UNAVAILABLE from a gateway error.
+const SMS_UNAVAILABLE = "SMS_UNAVAILABLE";
+
 // ── SMS (Twilio) ────────────────────────────────────────────────────────────
 
 let twilioClient = null;
@@ -61,9 +160,21 @@ function getTwilioClient() {
     }
 }
 
-// sendSms(phone, text) -> Promise<{ ok, simulated, error? }> — never rejects.
+// sendSms(phone, text) -> Promise<{ ok, simulated, unavailable?, error? }>
+// — never rejects.
 async function sendSms(phone, text) {
     try {
+        // Checked BEFORE getTwilioClient() so the console.log below — which
+        // prints the full message body, verification code and all — is
+        // unreachable in production. See smsMode()'s header.
+        if (getSmsMode() === "unavailable") {
+            console.error(
+                `🛑 SMS refused (not configured, or the 'twilio' package is missing) and NODE_ENV=production — ` +
+                `nothing sent to ${phone}. The console fallback is DEVELOPMENT ONLY: it would tell the customer ` +
+                `to read a code out of the server log.`
+            );
+            return { ok: false, simulated: false, unavailable: true, code: SMS_UNAVAILABLE, error: SMS_UNAVAILABLE };
+        }
         const client = getTwilioClient();
         if (!client) {
             console.log(`📲 [SMS fallback — not actually sent] To: ${phone} | ${text}`);
@@ -103,9 +214,21 @@ function getMailTransport() {
     }
 }
 
-// sendEmail(to, subject, html, text?) -> Promise<{ ok, simulated, error? }> — never rejects.
+// sendEmail(to, subject, html, text?) -> Promise<{ ok, simulated, unavailable?, error? }>
+// — never rejects.
 async function sendEmail(to, subject, html, text) {
     try {
+        // Unlike SMS this refuses nothing the customer is waiting on — the
+        // order it accompanies has already succeeded and every caller is
+        // fire-and-forget. The point is only that a message nobody sent must
+        // not be reported as sent. See emailMode()'s header.
+        if (getEmailMode() === "unavailable") {
+            console.error(
+                `🛑 E-mail not sent to ${to} (SMTP not configured, or the 'nodemailer' package is missing) ` +
+                `and NODE_ENV=production — subject: ${subject}`
+            );
+            return { ok: false, simulated: false, unavailable: true, error: "EMAIL_UNAVAILABLE" };
+        }
         const transport = getMailTransport();
         if (!transport) {
             console.log(`✉️  [E-mail fallback — not actually sent] To: ${to} | Subject: ${subject}`);
@@ -130,4 +253,11 @@ module.exports = {
     sendEmail,
     isSmsConfigured,
     isEmailConfigured,
+    smsMode,
+    emailMode,
+    smsPackageAvailable,
+    emailPackageAvailable,
+    getSmsMode,
+    getEmailMode,
+    SMS_UNAVAILABLE,
 };
