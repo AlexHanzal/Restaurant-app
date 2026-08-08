@@ -45,6 +45,11 @@ const SERVER_CONFIG = {
         users: "users",
         drivers: "drivers",
         orders: "orders",
+        // Persisted groups of nearby delivery orders (spec 2026-08-08 §8.1).
+        // Membership is computed ONCE and stored, not recomputed per driver
+        // request — the kitchen has to be able to prepare a batch together,
+        // which a per-driver recomputation could never support.
+        deliveryBatches: "delivery_batches",
         indoorOrders: "indoor_orders",
         menu: "menu",
         // The restaurant settings singleton (hours/closed days/pause/
@@ -192,6 +197,8 @@ const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
 const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
+const routing = require("./routing"); // pure batching/ranking algorithm — see its header
+const geocode = require("./geocode"); // address -> coordinates, cached; never on the checkout path
 // One-tap "Objednat znovu" (reorder) — docs/superpowers/specs/2026-07-25-
 // reorder-design.md. Self-contained module (token sign/verify, pending-code
 // store, recent-order selection/preview) — see its header comment for why
@@ -3632,6 +3639,169 @@ function setupAPIRoutes() {
 
     const VALID_PAYMENT_METHODS = ["cash", "card_on_delivery", "online_card"];
 
+    // ── DELIVERY ROUTING / BATCHING ──────────────────────────────────────────
+    // See docs/superpowers/specs/2026-08-08-delivery-routing-design.md.
+    // The algorithm itself is in routing.js (pure); everything here is the
+    // persistence and I/O around it.
+
+    function routingCfg() {
+        return settingsStore.getSettings().delivery.routing;
+    }
+
+    // User-Agent for Nominatim, built from the restaurant's own identity so a
+    // blocked instance is traceable to a real business, as the usage policy
+    // requires.
+    function geocoderUserAgent() {
+        const biz = settingsStore.getSettings().business || {};
+        const contact = biz.email || biz.phone || "";
+        return `${biz.name || "restaurace"} restaurace-app/1.0${contact ? ` (${contact})` : ""}`;
+    }
+
+    // The restaurant's own coordinates: manual override, else geocoded from
+    // business.address. Cached in module scope for the process lifetime — the
+    // restaurant does not move.
+    let cachedRestaurantOrigin = null;
+
+    async function restaurantOrigin() {
+        const cfg = routingCfg();
+        if (Number.isFinite(cfg.originLat) && Number.isFinite(cfg.originLon)) {
+            return { lat: cfg.originLat, lon: cfg.originLon };
+        }
+        if (cachedRestaurantOrigin) return cachedRestaurantOrigin;
+        const biz = settingsStore.getSettings().business || {};
+        const found = await geocode.geocode(biz.address, "", { userAgent: geocoderUserAgent() });
+        if (found) cachedRestaurantOrigin = { lat: found.lat, lon: found.lon };
+        return cachedRestaurantOrigin;
+    }
+
+    // Attach a freshly-geocoded order to a batch. SYNCHRONOUS AND await-FREE by
+    // design: better-sqlite3 is synchronous and Node is single-threaded, so this
+    // whole read-decide-write block cannot interleave with another request.
+    // Adding an `await` here would reintroduce exactly the race that
+    // tests/unit/db-patch.test.js documents.
+    function attachToBatch(orderId) {
+        const cfg = routingCfg();
+        if (!cfg.enabled) return;
+
+        const order = db.get(COL.orders, orderId);
+        if (!order || order.batchId || order.geoStatus !== "ok" || order.status !== "pending") return;
+
+        const now = new Date();
+        const allOrders = db.list(COL.orders);
+        const byId = new Map(allOrders.map(o => [o.id, o]));
+
+        // 1) An existing open batch that would accept it. When more than one
+        //    would, the nearest centroid wins; ties break on batch id so
+        //    formation is deterministic and testable (spec §8.3).
+        const candidates = [];
+        for (const batch of db.list(COL.deliveryBatches)) {
+            if (batch.status !== "open") continue;
+            const members = batch.orderIds.map(id => byId.get(id)).filter(Boolean);
+            if (members.length !== batch.orderIds.length) continue;
+            if (!routing.isBatchAcceptingJoins(members, now, cfg)) continue;
+            if (!routing.canJoin(members, order, cfg)) continue;
+            const c = routing.centroid(members);
+            candidates.push({ batch, dist: routing.haversineKm(c, order.geo) });
+        }
+        if (candidates.length) {
+            candidates.sort((a, b) => (a.dist - b.dist) || a.batch.id.localeCompare(b.batch.id));
+            const target = candidates[0].batch;
+            target.orderIds = [...target.orderIds, orderId];
+            db.set(COL.deliveryBatches, target.id, target);
+            db.patch(COL.orders, orderId, { batchId: target.id });
+            return;
+        }
+
+        // 2) Otherwise a lone order nearby, which brings a new batch into
+        //    existence. Batches of one are never created — a lone order is just
+        //    a lone order (spec §8.1).
+        const partners = allOrders
+            .filter(o => o.id !== orderId
+                && o.status === "pending"
+                && !o.batchId
+                && o.geoStatus === "ok"
+                && routing.isBatchAcceptingJoins([o], now, cfg)
+                && routing.canJoin([o], order, cfg))
+            .map(o => ({ order: o, dist: routing.haversineKm(o.geo, order.geo) }));
+        if (!partners.length) return;
+        partners.sort((a, b) => (a.dist - b.dist) || a.order.id.localeCompare(b.order.id));
+
+        const partner = partners[0].order;
+        const batchId = `b_${crypto.randomBytes(9).toString("hex")}`;
+        db.set(COL.deliveryBatches, batchId, {
+            id: batchId,
+            createdAt: now.toISOString(),
+            orderIds: [partner.id, orderId],
+            status: "open",
+            claimedBy: null,
+            claimedAt: null,
+        });
+        db.patch(COL.orders, partner.id, { batchId });
+        db.patch(COL.orders, orderId, { batchId });
+    }
+
+    // Remove an order from its batch, dissolving the batch if that would leave
+    // it with fewer than two members (spec §8.3.1). Without this, DELETE
+    // /orders/:id leaves a dangling member id behind.
+    function detachFromBatch(orderId) {
+        const order = db.get(COL.orders, orderId);
+        const batchId = order && order.batchId;
+        if (!batchId) return;
+        const batch = db.get(COL.deliveryBatches, batchId);
+        db.patch(COL.orders, orderId, { batchId: null });
+        if (!batch) return;
+        const remaining = batch.orderIds.filter(id => id !== orderId);
+        if (remaining.length < 2) {
+            batch.orderIds = remaining;
+            batch.status = "dissolved";
+            db.set(COL.deliveryBatches, batchId, batch);
+            for (const id of remaining) db.patch(COL.orders, id, { batchId: null });
+            return;
+        }
+        batch.orderIds = remaining;
+        db.set(COL.deliveryBatches, batchId, batch);
+    }
+
+    // Geocode in the BACKGROUND, after the order is already saved and the
+    // customer already has their confirmation. A geocoder outage, rate-limit, or
+    // unparseable address can never block or slow a sale (spec §14) — the worst
+    // case is one order sitting in the driver's "poloha neznámá" tail.
+    function scheduleGeocode(orderId) {
+        const cfg = routingCfg();
+        if (!cfg.enabled || !geocode.isEnabled()) return;
+        setImmediate(async () => {
+            try {
+                const order = db.get(COL.orders, orderId);
+                if (!order || order.geoStatus === "ok") return;
+                const found = await geocode.geocode(order.address, order.psc, { userAgent: geocoderUserAgent() });
+                if (!found) {
+                    db.patch(COL.orders, orderId, { geo: null, geoStatus: "failed" });
+                } else {
+                    db.patch(COL.orders, orderId, { geo: found, geoStatus: "ok" });
+                    attachToBatch(orderId);
+                }
+                broadcastBoardEvent();
+            } catch (e) {
+                console.error("Background geocode failed:", e);
+            }
+        });
+    }
+
+    // Orders written before this feature have no geoStatus at all. Enqueue any
+    // that a driver could still act on. Bounded by the same board window the
+    // kitchen uses, so this can never walk the whole order history.
+    function backfillGeocoding() {
+        const cfg = routingCfg();
+        if (!cfg.enabled || !geocode.isEnabled()) return;
+        const recent = kitchenBoard.filterForBoard(db.list(COL.orders), { now: new Date() });
+        for (const order of recent) {
+            if (order.status !== "pending") continue;
+            if (order.geoStatus) continue; // already ok/failed/pending
+            db.patch(COL.orders, order.id, { geoStatus: "pending" });
+            scheduleGeocode(order.id);
+        }
+    }
+
     app.post(`${api}/orders`, requireFeature("delivery"), V.validate(V.createOrderSchema), async (req, res) => {
         const { customerName, address, psc, phone, items, note, paymentMethod, email } = req.body || {};
 
@@ -3694,6 +3864,11 @@ function setupAPIRoutes() {
             claimedByName: null,
             createdAt: new Date().toISOString(),
             claimedAt: null,
+            // Delivery routing (spec 2026-08-08). Filled in by
+            // scheduleGeocode() after this response is already sent.
+            geo: null,
+            geoStatus: "pending",
+            batchId: null,
             // ── Payment ──
             paymentMethod: method,               // "cash" | "card_on_delivery" | "online_card"
             paymentStatus: "unpaid",             // "unpaid" | "paid" | "refunded"
@@ -3703,6 +3878,7 @@ function setupAPIRoutes() {
 
         db.set(COL.orders, id, order);
         broadcastBoardEvent(); // new delivery order — visible on the kitchen board immediately, regardless of payment method
+        scheduleGeocode(id);
 
         // go-live Task 4 (spec §6): order-confirmed SMS/e-mail — fired for
         // every payment method (the customer should hear "we got your
@@ -3918,6 +4094,129 @@ function setupAPIRoutes() {
         res.json({ success: true, order });
     });
 
+    // POST — the driver's ranked work list. See spec §9 for why this is a
+    // POST: the body carries the driver's live GPS, which is location data
+    // and has no business in a query string, an access log, or a proxy cache.
+    app.post(`${api}/driver/route`, requireFeature("delivery"), csrf.requireCsrf, requireDriver, V.validate(V.driverRouteSchema), async (req, res) => {
+        try {
+            const cfg = routingCfg();
+            const now = new Date();
+            const driverId = req.user.id;
+
+            backfillGeocoding();
+
+            // PRIVACY: filter server-side. The old flat list shipped every
+            // pending order to every driver and let driver.js hide other
+            // drivers' orders in the browser (driver.js:280) — which means
+            // another driver's customer PII was already on the wire. This
+            // endpoint does not repeat that.
+            const visible = db.list(COL.orders).filter(o =>
+                o.status === "pending" || o.claimedBy === driverId);
+
+            let origin = null;
+            if (Number.isFinite(req.body.lat) && Number.isFinite(req.body.lon)) {
+                origin = { lat: req.body.lat, lon: req.body.lon };
+            } else {
+                origin = await restaurantOrigin();
+            }
+
+            if (!cfg.enabled || !origin) {
+                // Feature off, or we have no idea where the restaurant is.
+                // Degrade to exactly the old behaviour rather than an error.
+                return res.json({
+                    enabled: false, origin: null, items: [],
+                    unlocated: visible.filter(o => o.status === "pending").map(o => o.id),
+                    orders: visible,
+                });
+            }
+
+            const batches = db.list(COL.deliveryBatches);
+            const plan = routing.planRoute({ orders: visible, batches, origin, now, cfg });
+
+            res.json({ enabled: true, origin, items: plan.items, unlocated: plan.unlocated, orders: visible });
+        } catch (e) {
+            console.error("Driver route planning failed:", e);
+            res.status(500).json({ error: "Nepodařilo se naplánovat trasu" });
+        }
+    });
+
+    // POST — claim every order in a batch, all or nothing.
+    //
+    // ⚠ THERE IS DELIBERATELY NO `await` BETWEEN THE CHECKS AND THE WRITES.
+    // better-sqlite3 is synchronous and Node is single-threaded, so this
+    // block cannot interleave with a competing driver's request — that is
+    // the ONLY thing making the all-or-nothing guarantee real. Adding an
+    // await (an SMS, a gateway call, anything) silently reintroduces the
+    // double-claim race. Notifications fire after the last write, below.
+    app.post(`${api}/orders/claim-batch`, requireFeature("delivery"), csrf.requireCsrf, requireDriver, V.validate(V.claimBatchSchema), (req, res) => {
+        const driverId = req.user.id;
+        const driverName = req.user.name;
+
+        const batch = db.get(COL.deliveryBatches, req.body.batchId);
+        if (!batch) return res.status(404).json({ error: "Skupina nenalezena" });
+        if (batch.status !== "open") {
+            return res.status(409).json({ error: "Tuto skupinu už převzal jiný řidič" });
+        }
+
+        const members = batch.orderIds.map(id => db.get(COL.orders, id));
+        const missing = batch.orderIds.filter((id, i) => !members[i]);
+        if (missing.length) return res.status(404).json({ error: "Objednávka ze skupiny nenalezena" });
+
+        const conflictingIds = members.filter(o => o.status !== "pending").map(o => o.id);
+        if (conflictingIds.length) {
+            return res.status(409).json({ error: "Objednávku ze skupiny už převzal jiný řidič", conflictingIds });
+        }
+
+        const notReady = members.filter(o => o.kitchenStatus !== "completed").map(o => o.id);
+        if (notReady.length) {
+            return res.status(409).json({ error: "Kuchyně ještě nedokončila všechny objednávky ve skupině", notReadyIds: notReady });
+        }
+
+        const claimedAt = new Date().toISOString();
+        for (const order of members) {
+            order.status = "claimed";
+            order.claimedBy = driverId;
+            order.claimedByName = driverName;
+            order.claimedAt = claimedAt;
+            db.set(COL.orders, order.id, order);
+        }
+        batch.status = "claimed";
+        batch.claimedBy = driverId;
+        batch.claimedAt = claimedAt;
+        db.set(COL.deliveryBatches, batch.id, batch);
+        // ── every write is done; awaits are safe from here ──
+
+        broadcastBoardEvent();
+
+        const notifSettings = settingsStore.getSettings().notifications;
+        if (notifSettings.smsOrderOnTheWay) {
+            for (const order of members) {
+                if (!order.phone) continue;
+                notify.sendSms(order.phone, `Objednávka č. ${order.id} je na cestě.`)
+                    .catch(e => console.error("On-the-way SMS crashed unexpectedly:", e));
+            }
+        }
+
+        res.json({ success: true, orders: members });
+    });
+
+    // POST — break a batch apart. The safety valve for when the algorithm
+    // makes a bad call on a busy night; members return to the pool as
+    // singles. requireAuth (not requireStaff) so a driver can also do it —
+    // but only while the batch is still unclaimed.
+    app.post(`${api}/delivery-batches/:id/split`, requireFeature("delivery"), csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), (req, res) => {
+        const batch = db.get(COL.deliveryBatches, req.params.id);
+        if (!batch) return res.status(404).json({ error: "Skupina nenalezena" });
+        if (batch.status !== "open") {
+            return res.status(409).json({ error: "Skupinu už nelze rozdělit" });
+        }
+        for (const id of batch.orderIds) db.patch(COL.orders, id, { batchId: null });
+        batch.status = "dissolved";
+        db.set(COL.deliveryBatches, batch.id, batch);
+        broadcastBoardEvent();
+        res.json({ success: true });
+    });
+
     app.post(`${api}/orders/:id/kitchen-status`, requireFeature("delivery"), csrf.requireCsrf, requireAuth, V.validateParams(V.paramsId), V.validate(V.kitchenStatusSchema), (req, res) => {
         const { status } = req.body || {};
 
@@ -3935,6 +4234,7 @@ function setupAPIRoutes() {
     // comment in auth.js for why this is not requireAdmin (the kitchen page's
     // delete button is used by non-admin staff).
     app.delete(`${api}/orders/:id`, requireFeature("delivery"), csrf.requireCsrf, requireStaff, V.validateParams(V.paramsId), (req, res) => {
+        detachFromBatch(req.params.id);
         const ok = db.remove(COL.orders, req.params.id);
         if (!ok) return res.status(404).json({ error: "Objednávka nenalezena" });
         broadcastBoardEvent();
