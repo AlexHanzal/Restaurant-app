@@ -212,3 +212,14 @@ html, body {
 .kit-grid .ds-empty {
     grid-column: 1 / -1;
 }
+
+/* Batched delivery orders: separate cards, visually tied. Same accent as
+   the driver page's batch card so it reads as one object in both places. */
+.kit-batched { border-left: 4px solid var(--ds-accent, #1a5c3a); }
+.kit-batch-band {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: .5rem; margin: -.25rem -.25rem .5rem; padding: .3rem .55rem;
+    background: var(--ds-accent-soft, #e8f1ec);
+    border-radius: .35rem; font-size: .82rem; font-weight: 600;
+}
+.kit-batch-band__count { font-weight: 500; opacity: .8; }

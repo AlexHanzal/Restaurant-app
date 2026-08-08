@@ -300,6 +300,20 @@ function renderDeliveryRow() {
         return;
     }
 
+    // Pull batch members adjacent to each other without disturbing the
+    // relative order of everything else: order by the position of each
+    // batch's FIRST member in the existing sort.
+    const firstSeen = new Map();
+    orders.forEach((o, i) => {
+        const key = o.batchId || `solo:${o.id}`;
+        if (!firstSeen.has(key)) firstSeen.set(key, i);
+    });
+    orders.sort((a, b) => {
+        const ka = a.batchId || `solo:${a.id}`;
+        const kb = b.batchId || `solo:${b.id}`;
+        return firstSeen.get(ka) - firstSeen.get(kb);
+    });
+
     orders.forEach(order => container.appendChild(renderDeliveryCard(order)));
 }
 
@@ -356,6 +370,20 @@ function renderDeliveryCard(order) {
         card.querySelector('.kit-ticket__action').addEventListener('click', () => completeDeliveryOrder(order));
     }
     card.querySelector('.kit-ticket__remove').addEventListener('click', () => removeDeliveryOrder(order));
+
+    // Batched orders keep their own card and their own Complete/Remove
+    // buttons — this band is purely a visual grouping cue so the kitchen
+    // prepares batch members together, per §11 of the design.
+    if (order.batchId) {
+        const siblings = (board.delivery || []).filter(o => o.batchId === order.batchId);
+        const ready = siblings.filter(o => o.kitchenStatus === 'completed').length;
+        card.classList.add('kit-batched');
+        card.insertAdjacentHTML('afterbegin', `
+            <div class="kit-batch-band">
+                <span>🔗 Skupina · připravit společně</span>
+                <span class="kit-batch-band__count">${ready} ze ${siblings.length} hotovo</span>
+            </div>`);
+    }
 
     return card;
 }
