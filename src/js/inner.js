@@ -4250,12 +4250,40 @@ async function renderSettingsView() {
                 <button type="button" class="inn-btn" id="setPscAddBtn">+ Přidat</button>
             </div>
         </div>
+        <h4>Řazení a slučování rozvozů</h4>
+        <label><input type="checkbox" id="setRoutingEnabled"> Řadit rozvozy podle vzdálenosti a slučovat blízké objednávky</label>
+        <label>Max. objednávek ve skupině <input type="number" id="setRoutingMaxStops" min="2" max="6" step="1"></label>
+        <label>Maximální vzdálenost ve skupině (m) <input type="number" id="setRoutingRadius" min="100" max="5000" step="50"></label>
+        <label>Jak dlouho lze do skupiny přidávat (min) <input type="number" id="setRoutingWindow" min="1" max="60" step="1"></label>
+        <label>Po kolika minutách čekání dostane objednávka přednost <input type="number" id="setRoutingGrace" min="0" max="240" step="5"></label>
+        <label>Jak silně čekání zvyšuje prioritu
+            <select id="setRoutingAgeWeight">
+                <option value="0.2">mírně</option>
+                <option value="0.5">středně</option>
+                <option value="1">silně</option>
+            </select>
+        </label>
     `;
     panels.appendChild(deliveryRulesPanel);
     deliveryRulesPanel.querySelector('#setDeliveryFee').value = settings.delivery.fee;
     deliveryRulesPanel.querySelector('#setDeliveryMinOrder').value = settings.delivery.minOrder;
     deliveryRulesPanel.querySelector('#setDeliveryFreeAbove').value = settings.delivery.freeAbove;
     deliveryRulesPanel.querySelector('#setDeliveryEta').value = settings.delivery.etaMinutes;
+    // Distance ranking / batching (plan Task 7, spec §13). Populate AND read
+    // (in the save handler below) — miss either half and the fields either
+    // render blank or a good save blanks the values back out.
+    const routing = settings.delivery.routing;
+    deliveryRulesPanel.querySelector('#setRoutingEnabled').checked = !!routing.enabled;
+    deliveryRulesPanel.querySelector('#setRoutingMaxStops').value = routing.maxStops;
+    deliveryRulesPanel.querySelector('#setRoutingRadius').value = routing.groupRadiusM;
+    deliveryRulesPanel.querySelector('#setRoutingWindow').value = routing.batchWindowMinutes;
+    deliveryRulesPanel.querySelector('#setRoutingGrace').value = routing.ageGraceMinutes;
+    // Snap to the nearest offered strength — a value set by hand in the DB
+    // must not silently become "mírně" just because it is not in the list.
+    const routingAgeWeights = [0.2, 0.5, 1];
+    const routingNearestAgeWeight = routingAgeWeights.reduce((best, w) =>
+        Math.abs(w - routing.agePriorityKmPerMinute) < Math.abs(best - routing.agePriorityKmPerMinute) ? w : best, routingAgeWeights[0]);
+    deliveryRulesPanel.querySelector('#setRoutingAgeWeight').value = String(routingNearestAgeWeight);
     const pscChipsEl = deliveryRulesPanel.querySelector('#setPscChips');
     renderPscChips(pscChipsEl);
 
@@ -4516,6 +4544,28 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
         return;
     }
 
+    const routingMaxStopsVal = Number(document.getElementById('setRoutingMaxStops').value);
+    const routingRadiusVal = Number(document.getElementById('setRoutingRadius').value);
+    const routingWindowVal = Number(document.getElementById('setRoutingWindow').value);
+    const routingGraceVal = Number(document.getElementById('setRoutingGrace').value);
+
+    if (!Number.isInteger(routingMaxStopsVal) || routingMaxStopsVal < 2 || routingMaxStopsVal > 6) {
+        showToast('Max. objednávek ve skupině musí být celé číslo 2–6', true);
+        return;
+    }
+    if (!Number.isFinite(routingRadiusVal) || routingRadiusVal < 100 || routingRadiusVal > 5000) {
+        showToast('Maximální vzdálenost ve skupině musí být 100–5000 m', true);
+        return;
+    }
+    if (!Number.isInteger(routingWindowVal) || routingWindowVal < 1 || routingWindowVal > 60) {
+        showToast('Okno pro slučování musí být celé číslo 1–60 minut', true);
+        return;
+    }
+    if (!Number.isInteger(routingGraceVal) || routingGraceVal < 0 || routingGraceVal > 240) {
+        showToast('Tolerance čekání musí být celé číslo 0–240 minut', true);
+        return;
+    }
+
     const updated = {
         ...settingsCache,
         business: {
@@ -4542,6 +4592,19 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
             freeAbove: deliveryFreeAboveVal,
             etaMinutes: deliveryEtaVal,
             pscWhitelist: settingsWorkingPscWhitelist.slice(),
+            // Spread settingsCache.delivery.routing FIRST — this panel does
+            // not expose batchBonusKm/originLat/originLon, and routingSchema
+            // is .strict(), so without the spread those arrive as undefined
+            // and the whole settings save 400s.
+            routing: {
+                ...settingsCache.delivery.routing,
+                enabled: deliveryRulesPanel.querySelector('#setRoutingEnabled').checked,
+                maxStops: routingMaxStopsVal,
+                groupRadiusM: routingRadiusVal,
+                batchWindowMinutes: routingWindowVal,
+                ageGraceMinutes: routingGraceVal,
+                agePriorityKmPerMinute: Number(deliveryRulesPanel.querySelector('#setRoutingAgeWeight').value),
+            },
         },
         // Table QR self-order (plan Task 6, spec §7) — read straight off the
         // DOM by id (same pattern as the Provozovna fields above) rather than
