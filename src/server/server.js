@@ -2928,9 +2928,17 @@ function setupAPIRoutes() {
     const api = SERVER_CONFIG.basePath + "/api";
 
     // SECURITY: generous backstop rate limit across the whole /api surface
-    // (see src/server/security.js). Login and SMS-send routes below layer
-    // their own stricter limiters on top of this one — this one just
-    // catches generic scripted abuse.
+    // (see src/server/security.js). Login, SMS-send and table-QR routes
+    // below layer their own stricter, better-keyed limiters on top of this
+    // one — this one just catches generic scripted abuse.
+    //
+    // Because it is mounted here, on the whole prefix, it applies to every
+    // route below IN ADDITION to that route's own limiter, and the smaller
+    // of the two is what a caller actually hits. Keep it comfortably above
+    // the largest per-route limit or it silently becomes the real limit for
+    // routes that were deliberately given a bigger, venue-aware budget —
+    // see the sizing comment on apiLimiter in security.js for the outage
+    // that caused.
     //
     // NEXT AGENTS: HTTPS redirect / helmet security headers / CORS are
     // mounted globally in setupMiddleware() (top of this file, runs before

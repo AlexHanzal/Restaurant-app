@@ -38,13 +38,56 @@ const LOGIN_AUDIT_COLLECTION = "login_audit";
 
 // ── RATE LIMITERS ───────────────────────────────────────────────────────
 
+// Every limit in this module, in one place, so the ONE invariant that ties
+// them together can be asserted rather than just commented:
+//
+//     apiBackstop > every other number here
+//
+// The backstop is mounted on the whole /api prefix (server.js), so it stacks
+// on top of each route's own limiter and the SMALLER of the two is what a
+// caller hits. If it ever drops below a per-route limit, that route's
+// carefully-keyed budget stops existing and nobody finds out until a service
+// falls over. tests/smoke/api-rate-limit.test.js asserts the ordering off
+// this object; the individual numbers are free to be retuned.
+const RATE_LIMITS = {
+    apiBackstop: 3000,
+    login: 8,
+    smsIp: 20,
+    smsPhone: 5,
+    tableOrderIp: 600,
+    tableOrderPerTable: 12,
+    tableStatusPerTable: 240,
+};
+
 // Generous backstop applied to the whole /api surface — catches scripted
 // abuse that isn't specifically a login/SMS endpoint (scraping, hammering
 // read endpoints, etc). Individual routes below layer stricter limits on
 // top of this one.
+//
+// THE NUMBER HERE MUST STAY ABOVE EVERY PER-ROUTE LIMIT BELOW. Two limiters
+// on one route do not negotiate — the SMALLER one binds, whichever is
+// mounted first. This sat at 300 while the table limiters below were sized
+// at 600 and 240, which meant neither of those could ever fire and every
+// carefully-keyed number in this file was decoration: the real, only limit
+// on the table routes was 300 requests per IP, i.e. 20/minute for an entire
+// restaurant sharing one NAT address. Four QR screens open plus a kitchen
+// board on its SSE-fallback poll (5s — see startBoardStream() in
+// src/js/kitchen.js, 180 requests a window on its own) exhausted that inside
+// ten minutes of a normal Friday service, after which the next guest to scan
+// a code got "Příliš mnoho požadavků" instead of a menu and staff got 429s
+// mid-order. Nothing in the logs said "rate limiter".
+//
+// So this is deliberately NOT a venue-sized number, and must not be tuned as
+// if it were one. It is pure anti-script defence — the ceiling on a bot that
+// found the API and is walking it. Every route where "too much" has a
+// meaningful, venue-aware value already carries its own limiter keyed on the
+// thing that actually identifies the abuser (login 8/IP, SMS 20/IP + 5/phone,
+// table orders 12/table, status polls 240/table). Those are the real limits.
+// Raise this one freely if a legitimate surface ever approaches it; tighten
+// it only after checking it still clears every limit below.
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 300,
+    limit: RATE_LIMITS.apiBackstop,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Příliš mnoho požadavků z této adresy. Zkuste to prosím později." },
@@ -57,7 +100,7 @@ const apiLimiter = rateLimit({
 // while a credential-stuffing script is.
 const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 8,
+    limit: RATE_LIMITS.login,
     standardHeaders: true,
     legacyHeaders: false,
     skipSuccessfulRequests: true,
@@ -74,7 +117,7 @@ function normalizePhoneForRateLimit(raw) {
 // phone numbers (each individually under the per-phone limit below).
 const smsIpLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    limit: 20,
+    limit: RATE_LIMITS.smsIp,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Příliš mnoho žádostí o SMS kód z této adresy. Zkuste to prosím později." },
@@ -88,7 +131,7 @@ const smsIpLimiter = rateLimit({
 // caps total codes sent to a number per hour regardless of cooldown resets.
 const smsPhoneLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    limit: 5,
+    limit: RATE_LIMITS.smsPhone,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => normalizePhoneForRateLimit(req.body && req.body.phone) || "unknown-phone",
@@ -113,7 +156,7 @@ const smsPhoneLimiter = rateLimit({
 // stop a script; the real per-guest limits are the table-keyed ones below.
 const tableOrderIpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 600,
+    limit: RATE_LIMITS.tableOrderIp,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
@@ -131,7 +174,7 @@ const tableOrderIpLimiter = rateLimit({
 // explicit marker rather than a silent `|| req.ip`.
 const tableOrderTableLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 12,
+    limit: RATE_LIMITS.tableOrderPerTable,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => req.tableFileId || "unresolved-table",
@@ -158,7 +201,7 @@ const tableOrderTableLimiter = rateLimit({
 // req.tableFileId, or keyGenerator collapses every table onto one bucket.
 const tableStatusLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 240,
+    limit: RATE_LIMITS.tableStatusPerTable,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => req.tableFileId || "unresolved-table",
@@ -360,6 +403,7 @@ async function dummyCompare(plain) {
 }
 
 module.exports = {
+    RATE_LIMITS,
     apiLimiter,
     loginLimiter,
     smsIpLimiter,

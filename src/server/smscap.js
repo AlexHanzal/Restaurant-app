@@ -14,7 +14,8 @@
 //   Both are already well defended against a single abuser — smsIpLimiter
 //   (20/hour/IP), smsPhoneLimiter (5/hour/phone, deliberately SHARED between
 //   the two routes so one can't top up the other's budget), a 30s per-phone
-//   resend cooldown, and the 300/15min apiLimiter backstop.
+//   resend cooldown, and the apiLimiter backstop (3000/15min — a bot ceiling,
+//   not a meaningful bound on this route; the two above are).
 //
 //   Every one of those is per-IP or per-phone. None of them bounds the TOTAL.
 //   An attacker with a pool of N addresses multiplies straight through at
