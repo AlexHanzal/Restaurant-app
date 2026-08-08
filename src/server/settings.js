@@ -93,6 +93,37 @@ function buildDefaultSettings() {
             freeAbove: 600,
             pscWhitelist: ["12000", "12800"],
             etaMinutes: 60,
+            // Distance-ranked driver list + batching of nearby orders —
+            // docs/superpowers/specs/2026-08-08-delivery-routing-design.md.
+            //
+            // Every weight below is in KILOMETRES so they can be added and
+            // subtracted in one score (spec §5). `enabled: false` turns off
+            // geocoding entirely and leaves the driver list as it was
+            // before this feature — that is also the opt-out for an owner
+            // who does not want addresses sent to OpenStreetMap (§17).
+            routing: {
+                enabled: true,
+                // Capped at 6 by routingSchema: planBatch() brute-forces
+                // every permutation to get a provably optimal stop order.
+                maxStops: 3,
+                // No two stops in a batch are ever further apart than this.
+                groupRadiusM: 800,
+                // How long a batch keeps accepting new members, measured
+                // from its OLDEST order.
+                batchWindowMinutes: 10,
+                // Waiting time below this earns no priority at all.
+                ageGraceMinutes: 30,
+                // ...and above it, each minute is worth this many km of
+                // head start. 0.5 => a 45-min-old order behaves as if it
+                // were 7.5 km closer than it is.
+                agePriorityKmPerMinute: 0.5,
+                // What one saved return trip is worth, per extra stop.
+                batchBonusKm: 1.5,
+                // Manual override for the restaurant's own coordinates.
+                // null => geocoded from business.address on demand.
+                originLat: null,
+                originLon: null,
+            },
         },
         // Customer QR self-order at tables (spec: docs/superpowers/specs/
         // 2026-08-04-table-qr-self-order-design.md §7). Same day/hours shape

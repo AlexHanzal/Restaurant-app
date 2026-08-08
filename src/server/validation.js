@@ -734,6 +734,40 @@ function nonNegNumber(max, label) {
     );
 }
 
+// Delivery routing/batching (spec 2026-08-08 §13). MUST stay in lockstep
+// with settings.js's DEFAULT_SETTINGS.delivery.routing — `delivery` below is
+// .strict(), so a default without a schema entry here makes PUT /settings
+// 400 the moment the admin panel round-trips the object it just fetched.
+const routingSchema = z.object({
+    enabled: z.coerce.boolean(),
+    // Hard ceiling of 6, NOT a taste call: routing.js's planBatch() brute-
+    // forces all permutations for a provably optimal stop order. 6 stops is
+    // 720 permutations (microseconds); 10 would be 3.6 million.
+    maxStops: boundedInt(2, 6, "Max. zastávek ve skupině"),
+    groupRadiusM: boundedInt(100, 5000, "Poloměr skupiny (m)"),
+    batchWindowMinutes: boundedInt(1, 60, "Okno pro slučování (min)"),
+    ageGraceMinutes: boundedInt(0, 240, "Tolerance čekání (min)"),
+    agePriorityKmPerMinute: nonNegNumber(5, "Váha čekání"),
+    batchBonusKm: nonNegNumber(20, "Bonus za sloučení"),
+    originLat: z.number().min(-90).max(90).nullable(),
+    originLon: z.number().min(-180).max(180).nullable(),
+}).strict();
+
+// POST /api/driver/route — the driver's live position. Sent in the BODY, not
+// a query string: it is location data, and query strings end up in access
+// logs and proxy caches.
+const driverRouteSchema = z.object({
+    lat: z.number().min(-90).max(90).nullish(),
+    lon: z.number().min(-180).max(180).nullish(),
+}).strict();
+
+// POST /api/orders/claim-batch — a batch id, deliberately NOT a list of
+// order ids. The server owns batch membership, so a client cannot ask to
+// claim an arbitrary set of orders by calling it a "batch".
+const claimBatchSchema = z.object({
+    batchId: reqStr(80, "ID skupiny"),
+}).strict();
+
 // ── FLOORPLAN SCHEMA (docs/superpowers/specs/2026-07-27-floorplan-table- ──
 // picking-design.md §4.2, §7.1) ─────────────────────────────────────────
 // settings.floorplan.rooms — the admin *Rozložení* editor's PUT /settings
@@ -814,6 +848,7 @@ const settingsSchema = z.object({
         freeAbove: nonNegNumber(100_000, "Doprava zdarma od"),
         pscWhitelist: pscWhitelistSchema,
         etaMinutes: boundedInt(1, 600, "Doba doručení (min)"),
+        routing: routingSchema,
     }).strict(),
     // Customer QR self-order (spec 2026-08-04 §7). MUST be declared here or
     // PUT /settings 400s the moment the admin panel sends back the object it
@@ -932,4 +967,6 @@ module.exports = {
     createUserSchema,
     createDriverSchema,
     gopayWebhookBodySchema,
+    driverRouteSchema,
+    claimBatchSchema,
 };
