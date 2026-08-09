@@ -165,8 +165,12 @@ what the admin's own "Smazat rezervaci" produces.
 3. If `cancellable` is false, show the reason and no button.
 4. Otherwise one confirm button → `POST` → success or the server's reason.
 
-Reuses `design.css` and `reservation.css`; no new visual language. Added to
-the service-worker precache list alongside the other pages.
+Reuses `design.css` and `reservation.css`; no new visual language.
+
+**Not** added to `SW_SHELL_FILES`: that list is the admin/POS offline shell
+(`inner.html` and friends), not customer pages — the customer reservation page
+itself is not in it either. A cancel page served from cache would also be the
+wrong behaviour, since its whole content depends on a live lookup.
 
 The page shows a summary before acting, rather than cancelling on page load:
 SMS clients, link scanners, and messaging previews fetch URLs unbidden, and a
