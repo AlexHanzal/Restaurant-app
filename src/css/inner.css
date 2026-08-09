@@ -867,6 +867,16 @@ button.inn-status-pill.unpaid:hover { background: var(--warn); color: #fff; }
 }
 .inn-field-group input::placeholder,
 .inn-field-group textarea::placeholder { color: var(--ds-faint); }
+
+/* Explanatory line under a field, for a setting whose units or edge values
+   are not obvious from the label alone (e.g. "0 = pouze na dnešek"). */
+.inn-field-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.78em;
+    line-height: 1.4;
+    color: var(--muted);
+}
 .inn-field-group input[type="text"]:focus,
 .inn-field-group input[type="password"]:focus,
 .inn-field-group input[type="number"]:focus,

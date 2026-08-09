@@ -4188,8 +4188,24 @@ async function renderSettingsView() {
     // ── Rezervace — otevírací hodiny ─────────────────────────────────────
     const resvPanel = document.createElement('div');
     resvPanel.className = 'inn-panel';
-    resvPanel.innerHTML = '<h3 class="inn-settings-section-title">Rezervace — otevírací hodiny</h3><div class="inn-hours-table" id="setResvHoursTable"></div>';
+    // `maxDaysAhead` is how far ahead a guest may book. The customer page
+    // renders exactly this many days in its day strip, and the server refuses
+    // anything past it (settings.js/isReservationSlotOpen) — before this
+    // control existed the horizon was a hardcoded client-side constant with
+    // no server bound at all, so a hand-crafted request could book years out.
+    resvPanel.innerHTML = `
+        <h3 class="inn-settings-section-title">Rezervace — otevírací hodiny</h3>
+        <div class="inn-settings-grid">
+            <div class="inn-field-group">
+                <label for="setResvMaxDaysAhead">Rezervovat lze dopředu (dny)</label>
+                <input type="number" id="setResvMaxDaysAhead" min="0" max="365" step="1">
+                <small class="inn-field-hint">Kolik dní dopředu si host může rezervovat stůl. 0 = pouze na dnešek.</small>
+            </div>
+        </div>
+        <div class="inn-hours-table" id="setResvHoursTable"></div>
+    `;
     panels.appendChild(resvPanel);
+    resvPanel.querySelector('#setResvMaxDaysAhead').value = settings.reservations.maxDaysAhead;
     renderReservationHoursTable(resvPanel.querySelector('#setResvHoursTable'), settings.reservations.days);
 
     // ── Rozvoz — hodiny ───────────────────────────────────────────────────
@@ -4544,6 +4560,14 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
         return;
     }
 
+    // Same 0-365 bound validation.js's settingsSchema enforces — checked here
+    // too so the admin gets a named Czech message instead of a generic 400.
+    const resvMaxDaysAheadVal = Number(document.getElementById('setResvMaxDaysAhead').value);
+    if (!Number.isInteger(resvMaxDaysAheadVal) || resvMaxDaysAheadVal < 0 || resvMaxDaysAheadVal > 365) {
+        showToast('Rezervovat lze dopředu musí být celé číslo 0–365 dní', true);
+        return;
+    }
+
     const routingMaxStopsVal = Number(document.getElementById('setRoutingMaxStops').value);
     const routingRadiusVal = Number(document.getElementById('setRoutingRadius').value);
     const routingWindowVal = Number(document.getElementById('setRoutingWindow').value);
@@ -4581,6 +4605,7 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
         reservations: {
             ...settingsCache.reservations,
             paused: resvPausedCheckbox.checked,
+            maxDaysAhead: resvMaxDaysAheadVal,
             days: resvDays,
         },
         delivery: {
@@ -4598,12 +4623,21 @@ async function saveSettingsFromForm(resvPausedCheckbox, deliveryPausedCheckbox, 
             // and the whole settings save 400s.
             routing: {
                 ...settingsCache.delivery.routing,
-                enabled: deliveryRulesPanel.querySelector('#setRoutingEnabled').checked,
+                // Read by id off the document, NOT through `deliveryRulesPanel`
+                // — that const is local to renderSettingsView() and is not in
+                // scope here, so referencing it threw a ReferenceError that
+                // aborted this whole function. The effect was that "Uložit
+                // nastavení" silently did nothing for EVERY setting on the
+                // page (the throw happens while building the payload, before
+                // the PUT is ever issued), with only an uncaught rejection in
+                // the console to show for it. Same document.getElementById
+                // pattern every other field in this function already uses.
+                enabled: document.getElementById('setRoutingEnabled').checked,
                 maxStops: routingMaxStopsVal,
                 groupRadiusM: routingRadiusVal,
                 batchWindowMinutes: routingWindowVal,
                 ageGraceMinutes: routingGraceVal,
-                agePriorityKmPerMinute: Number(deliveryRulesPanel.querySelector('#setRoutingAgeWeight').value),
+                agePriorityKmPerMinute: Number(document.getElementById('setRoutingAgeWeight').value),
             },
         },
         // Table QR self-order (plan Task 6, spec §7) — read straight off the
