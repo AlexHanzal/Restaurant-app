@@ -20,11 +20,13 @@
 // Czech diacritics and is therefore UCS-2 encoded, 70 characters per segment.
 // A JWT is 150+ characters and would turn one message into four.
 //
-// Dependency-free apart from node:crypto — no db, no express, no settings —
-// so every refusal rule is unit-testable without standing up a server.
+// Dependency-free apart from node:crypto and timetable.js (itself
+// dependency-free) — no db, no express, no settings — so every refusal rule
+// is unit-testable without standing up a server.
 // ============================================================================
 
 const crypto = require("crypto");
+const { parseDateStr } = require("./timetable");
 
 // hourIndex 1-12 -> real clock hour 8:00-20:00. Same convention as
 // RESERVATION_HOURS in renderer.js and the reminder scanner in server.js.
@@ -39,6 +41,9 @@ function newToken() {
 // Constant-time compare that NEVER throws. timingSafeEqual requires equal
 // lengths and throws otherwise, which would turn a malformed query string
 // into a 500 — and the throw itself would leak length information.
+// An empty string never matches, even against another empty string: a slot
+// with no cancelToken at all (pre-feature data) must never be cancellable by
+// an empty/absent token, so length 0 is rejected outright before comparison.
 function tokensMatch(a, b) {
     if (typeof a !== "string" || typeof b !== "string") return false;
     if (a.length === 0 || a.length !== b.length) return false;
@@ -55,7 +60,7 @@ function tokensMatch(a, b) {
 function findBooking(records, token) {
     if (typeof token !== "string" || token.length === 0) return null;
 
-    for (const record of records || []) {
+    for (const record of Array.isArray(records) ? records : []) {
         const data = (record && record.data) || {};
 
         for (const dateStr of Object.keys(data)) {
@@ -87,12 +92,20 @@ function findBooking(records, token) {
     return null;
 }
 
-// When does this booking start, as a local Date?
+// When does this booking start, as a local Date? Returns null if
+// booking.dateStr is not a real calendar date — reuses timetable.js's
+// parseDateStr rather than a second hand-rolled parser, since that is also
+// where the "2026-02-29 silently rolls to March 1" trap is already handled.
 function bookingStart(booking) {
+    const date = parseDateStr(booking.dateStr);
+    if (!date) return null;
+
     const hour = booking.hourKeys[0] + START_HOUR_OFFSET;
-    const [y, m, d] = booking.dateStr.split("-").map(Number);
-    return new Date(y, m - 1, d, hour, 0, 0, 0);
+    date.setHours(hour, 0, 0, 0);
+    return date;
 }
+
+const NOT_FOUND = { ok: false, status: 410, reason: "Rezervace nebyla nalezena — možná už byla zrušena." };
 
 // The whole refusal policy, in evaluation order. Pure function of the
 // booking and the clock.
@@ -102,7 +115,20 @@ function canCancel(booking, now = new Date()) {
     // "is this token real", and a cancelled booking's slots are gone, so
     // the two are genuinely indistinguishable here anyway.
     if (!booking) {
-        return { ok: false, status: 410, reason: "Rezervace nebyla nalezena — možná už byla zrušena." };
+        return NOT_FOUND;
+    }
+
+    // A booking whose stored dateStr isn't a real calendar date can't be
+    // reasoned about — bookingStart(booking) would be null, and comparing
+    // against an Invalid Date is always false, which would silently skip
+    // the "already started" check below and authorize a cancellation this
+    // function has no basis for. Treat it the same as "not found": this
+    // isn't a usable booking, so it gets the same answer an unknown token
+    // gets, rather than a third, more informative status that would make
+    // this endpoint an oracle for "the data is corrupt".
+    const start = bookingStart(booking);
+    if (!start) {
+        return NOT_FOUND;
     }
 
     // No refund is ever initiated by an untrusted link. Money movement stays
@@ -111,7 +137,7 @@ function canCancel(booking, now = new Date()) {
         return { ok: false, status: 409, reason: "Objednávka je zaplacená — zrušení prosím vyřešte telefonicky." };
     }
 
-    if (bookingStart(booking) <= now) {
+    if (start <= now) {
         return { ok: false, status: 409, reason: "Tato rezervace už proběhla." };
     }
 

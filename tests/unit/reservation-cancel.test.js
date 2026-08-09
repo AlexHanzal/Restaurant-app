@@ -42,6 +42,10 @@ test("tokensMatch returns false rather than throwing on bad input", () => {
     }
 });
 
+test("tokensMatch(\"\", \"\") is false — an empty token must never match", () => {
+    assert.strictEqual(cancel.tokensMatch("", ""), false);
+});
+
 // ── findBooking ─────────────────────────────────────────────────────────
 
 test("findBooking locates every hour of a multi-hour booking", () => {
@@ -66,6 +70,12 @@ test("findBooking ignores slots with no cancelToken at all", () => {
     // Bookings made before this feature shipped.
     const r = record({ 5: { content: "Starý host", isPermanent: false } });
     assert.strictEqual(cancel.findBooking([r], "tok"), null);
+});
+
+test("findBooking returns null rather than throwing on a non-iterable records value", () => {
+    assert.strictEqual(cancel.findBooking({}, "tok"), null);
+    assert.strictEqual(cancel.findBooking(null, "tok"), null);
+    assert.strictEqual(cancel.findBooking(undefined, "tok"), null);
 });
 
 // ── canCancel ───────────────────────────────────────────────────────────
@@ -118,4 +128,20 @@ test("the earliest hour decides whether the booking has started", () => {
 test("a booking on an earlier date is 409 even at a later hour", () => {
     const found = cancel.findBooking([record({ 12: slot() }, "2026-08-09", 6)], "tok");
     assert.strictEqual(cancel.canCancel(found, NOW).ok, false);
+});
+
+test("a booking with an unparseable dateStr is refused as not-found, not silently allowed", () => {
+    const found = cancel.findBooking([record({ 5: slot() }, "not-a-real-date", 0)], "tok");
+    const r = cancel.canCancel(found, NOW);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.status, 410);
+    assert.match(r.reason, /nebyla nalezena/i);
+});
+
+test("a booking with a well-formed but nonexistent dateStr (2026-02-29) is refused as not-found", () => {
+    const found = cancel.findBooking([record({ 5: slot() }, "2026-02-29", 0)], "tok");
+    const r = cancel.canCancel(found, NOW);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.status, 410);
+    assert.match(r.reason, /nebyla nalezena/i);
 });
