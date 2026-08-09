@@ -1025,9 +1025,19 @@ function renderTimeGrid() {
     // same range server-side.
     const range = getReservationHourRange(dayIndex);
 
+    // An hour that has already started today is not bookable — the server
+    // rejects it (settings.js/isReservationSlotOpen, "Tento termín už je v
+    // minulosti"), so offering it here would only strand the customer at the
+    // last step of the flow. hourIndex 1-12 maps to 8:00-20:00, so the slot's
+    // real start hour is hourIndex + 7 (same convention as RESERVATION_HOURS
+    // and the reminder scanner in server.js).
+    const now = getCurrentDate();
+    const isToday = dateStr === getDateString(now);
+
     RESERVATION_HOURS.forEach((label, i) => {
         const hourIndex = i + 1;
         if (hourIndex < range.from || hourIndex > range.to) return;
+        if (isToday && hourIndex + 7 <= now.getHours()) return;
         const free = isAnyTableFreeAtHour(dateStr, dayIndex, hourIndex);
         const chip = document.createElement('button');
         chip.type = 'button';
@@ -1041,6 +1051,16 @@ function renderTimeGrid() {
         }
         grid.appendChild(chip);
     });
+
+    // Late in the evening every remaining hour for today has already started,
+    // which would otherwise leave this step rendering as a blank gap with no
+    // explanation of why.
+    if (!grid.children.length) {
+        const p = document.createElement('p');
+        p.className = 'ds-empty';
+        p.textContent = 'Na dnešek už nelze rezervovat, zkuste další den.';
+        grid.appendChild(p);
+    }
 }
 
 // Step 3's chosen value, mirrored into the head so the hour survives scrolling.

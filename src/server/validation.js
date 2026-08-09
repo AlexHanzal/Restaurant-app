@@ -401,8 +401,19 @@ const payOnlineReturnUrlSchema = z.object({
 const sendCodeSchema = z.object({
     phone: phoneSchema,
     tableName: reqStr(100, "Stůl"),
+    // Format/calendar validity and the past/horizon bounds are enforced by
+    // settings.isReservationSlotOpen, which owns every other reservation
+    // rule and can phrase the rejection in the same Czech the customer sees
+    // for a paused/closed/out-of-hours slot. Kept as a plain bounded string
+    // here so a malformed date is not reported as a schema error.
     dateStr: reqStr(20, "Datum"),
-    dayIndex: boundedInt(0, 6, "dayIndex"),
+    // NOT the source of truth as of the 2026-08-09 review (fix 1) — the
+    // server derives the weekday from dateStr. Optional, so a client that
+    // omits it is fine; when present it is cross-checked against the date
+    // and a disagreement is refused (see the send-code handler in
+    // server.js). Clients cached from before the fix keep working because
+    // they compute the same value from the same date.
+    dayIndex: boundedInt(0, 6, "dayIndex").optional(),
     startHour: boundedInt(0, 23, "startHour"),
     duration: boundedInt(1, 24, "duration"),
     guestName: reqStr(150, "Jméno"),
@@ -838,6 +849,13 @@ const settingsSchema = z.object({
     business: settingsBusinessSchema,
     reservations: z.object({
         paused: z.coerce.boolean(),
+        // Booking horizon in days (2026-08-09 review, fix 2). Declared here
+        // because this object is .strict() and the admin panel PUTs back the
+        // whole settings object it GET-ed — a default settings.js ships but
+        // this schema doesn't declare 400s every save. Capped at a year:
+        // beyond that the per-table record just accumulates date keys
+        // nobody will ever look at.
+        maxDaysAhead: boundedInt(0, 365, "Rezervace dopředu (dny)"),
         days: reservationDaysSchema,
     }).strict(),
     delivery: z.object({

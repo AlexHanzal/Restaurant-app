@@ -250,7 +250,24 @@ async function start(opts = {}) {
         cleanupDbFiles(dbPath);
     }
 
-    return { baseUrl, api, dbPath, port, stop };
+    // The child's console output so far (stdout + stderr), for tests that
+    // need to observe something the HTTP API deliberately does not return.
+    //
+    // The reservation suite is the reason this exists: with TWILIO_* blanked
+    // (which this harness guarantees) and NODE_ENV != production, notify.js
+    // takes its simulated path and console.logs the message body — including
+    // the verification code — instead of sending an SMS. That log line is
+    // the only way for a test to complete the real send-code ->
+    // verify-and-book flow, and reading it is exactly what a developer does
+    // when running the app locally. It must NEVER become the way production
+    // code learns a code: see notify.js's sendSms, which makes that fallback
+    // unreachable when NODE_ENV=production precisely so a customer can never
+    // be told to read one out of a log.
+    function logs() {
+        return stdout + stderr;
+    }
+
+    return { baseUrl, api, dbPath, port, stop, logs };
 }
 
 // ── DIRECT FIXTURE SEEDING ──────────────────────────────────────────────

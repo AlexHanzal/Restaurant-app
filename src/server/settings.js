@@ -27,6 +27,10 @@
 // ============================================================================
 
 const db = require("./db");
+// Pure date/occupancy helpers, no db access — see timetable.js's header for
+// why the weekday is DERIVED from the date here rather than trusted from the
+// request body.
+const timetable = require("./timetable");
 
 const SETTINGS_COLLECTION = "settings";
 const SETTINGS_ID = "restaurant";
@@ -67,6 +71,13 @@ function buildDefaultSettings() {
         },
         reservations: {
             paused: false,
+            // How far ahead a customer may book, in days (0 = today only).
+            // Matches RESERVATION_DAYS_AHEAD in renderer.js, which is what
+            // the day strip renders — before this existed the client's 14
+            // days were the ONLY limit, and the server happily accepted a
+            // booking for 2099. Must stay declared in validation.js's
+            // (strict) settingsSchema alongside this default.
+            maxDaysAhead: 14,
             days: {
                 "0": { open: true, fromHour: 1, toHour: 12 },
                 "1": { open: true, fromHour: 1, toHour: 12 },
@@ -293,28 +304,64 @@ function findClosedDay(settings, dateStr) {
 
 // ── ENFORCEMENT HELPERS (server is the authority — spec §2) ─────────────
 
-// dateStr: "YYYY-MM-DD"; dayIndex: 0-6 (Po-Ne, Monday-first — go-live Task 6,
-// spec §11); hourIndex: 1-12; duration: whole hours (>=1). Returns
-// { ok, reason } — reason is a ready-to-show Czech message when ok is
-// false, null otherwise.
-function isReservationSlotOpen(settings, dateStr, dayIndex, hourIndex, duration) {
+// dateStr: "YYYY-MM-DD"; hourIndex: 1-12; duration: whole hours (>=1);
+// now: a JS Date (defaults to "right now"), injected so this stays a pure
+// function and its date rules are testable — same as isDeliveryOpenNow.
+// Returns { ok, reason } — reason is a ready-to-show Czech message when ok
+// is false, null otherwise.
+//
+// NOTE (2026-08-09 review, fix 1): there is deliberately NO dayIndex
+// parameter. It used to be one, taken straight from the request body and
+// validated only as "an integer 0-6", so a caller could pair a Saturday's
+// dateStr with Monday's dayIndex and be checked against the wrong weekday's
+// rules — booking a day the restaurant had closed. The weekday is now
+// derived from dateStr, which makes that mismatch unrepresentable rather
+// than merely rejected. Callers that need the index for storage get it from
+// timetable.dayIndexFromDateStr() the same way this does.
+function isReservationSlotOpen(settings, dateStr, hourIndex, duration, now = new Date()) {
     const resv = settings.reservations || {};
 
     if (resv.paused) {
         return { ok: false, reason: "Rezervace jsou dočasně pozastaveny." };
     }
 
+    // fix 2: dateStr used to be validated only as "a non-empty string of at
+    // most 20 characters" (reqStr in validation.js), so "aaaa" was a
+    // bookable date — it just created a junk key in the timetable record.
+    const date = timetable.parseDateStr(dateStr);
+    if (!date) {
+        return { ok: false, reason: "Neplatné datum." };
+    }
+
     if (findClosedDay(settings, dateStr)) {
         return { ok: false, reason: "V tento den je zavřeno, rezervace není možná." };
     }
 
-    // go-live Task 6: the only day-level gate left is a generic 0-6 integer
-    // check (defends against malformed/out-of-range input) — there is no
-    // more weekday-vs-weekend distinction here. Per-day closing (including
-    // weekends) is entirely driven by resv.days[k].open below.
-    if (!Number.isInteger(dayIndex) || dayIndex < 0 || dayIndex > 6) {
-        return { ok: false, reason: "Neplatný den." };
+    // fix 2, the past: date-granular first, then the hour within today.
+    // hourIndex 1-12 maps to 8:00-20:00 (RESERVATION_HOURS in renderer.js),
+    // so the slot's real start hour is hourIndex + 7 — a booking made at
+    // 19:00 for today at 8:00 was previously accepted by the server AND
+    // offered by the client's time grid.
+    const todayStr = formatDateStrLocal(now);
+    if (dateStr < todayStr) {
+        return { ok: false, reason: "Tento termín už je v minulosti." };
     }
+    if (dateStr === todayStr && Number(hourIndex) + 7 <= now.getHours()) {
+        return { ok: false, reason: "Tento termín už je v minulosti." };
+    }
+
+    // fix 2, the future: bound the booking horizon server-side.
+    const maxDaysAhead = Number.isInteger(resv.maxDaysAhead) ? resv.maxDaysAhead : 14;
+    const horizon = new Date(now.getFullYear(), now.getMonth(), now.getDate() + maxDaysAhead);
+    if (date > horizon) {
+        return { ok: false, reason: `Rezervovat lze nejvýše ${maxDaysAhead} dní dopředu.` };
+    }
+
+    // go-live Task 6: no weekday-vs-weekend distinction here — per-day
+    // closing (including weekends) is entirely driven by resv.days[k].open
+    // below. The index itself can no longer be out of range: it comes from
+    // the calendar, not the caller.
+    const dayIndex = timetable.dayIndexFromDateStr(dateStr);
 
     const day = resv.days && resv.days[String(dayIndex)];
     if (!day || !day.open) {
@@ -467,6 +514,10 @@ module.exports = {
     // by server.js routes:
     mergeDefaults,
     dayIndexMonFirst,
+    // Re-exported from timetable.js so routes that already hold
+    // `settingsStore` can derive a booking's weekday without a second
+    // require — see isReservationSlotOpen's note about fix 1.
+    dayIndexFromDateStr: timetable.dayIndexFromDateStr,
     formatDateStrLocal,
     formatHHMM,
 };

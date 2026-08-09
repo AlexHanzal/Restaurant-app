@@ -195,6 +195,7 @@ const offlineSaleRules = require("./offline-sale"); // paidAt clamping + client-
 const V = require("./validation"); // input validation (zod schemas + validate()/validateParams() middleware) — see validation.js
 const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/sales — see sales-stats.js
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
+const timetable = require("./timetable"); // pure date/slot-occupancy rules shared with the customer-facing availability logic — see timetable.js
 const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
 const routing = require("./routing"); // pure batching/ranking algorithm — see its header
@@ -3281,10 +3282,16 @@ function setupAPIRoutes() {
 
         const abbreviation = guestName.split(/\s+/).map(w => w[0]).join("").slice(0, 3).toUpperCase();
 
-        for (let h = startHour; h < startHour + duration; h++) {
-            if (data.data[dateStr][dayIndex][h]) {
-                return { ok: false, error: `Slot ${h} už není volný` };
-            }
+        // 2026-08-09 review, fix 3: the occupancy check now goes through
+        // timetable.isRangeFree, which ALSO applies permanent bookings
+        // forward from earlier dates — the rule renderer.js has always used
+        // to grey a slot out for the customer. This check used to look only
+        // at `data.data[dateStr][dayIndex][h]`, so a standing reservation
+        // was invisible to it and any request that skipped the UI booked
+        // straight over one. See timetable.js's header.
+        const rangeCheck = timetable.isRangeFree(data, dateStr, dayIndex, startHour, duration);
+        if (!rangeCheck.ok) {
+            return { ok: false, error: `Slot ${rangeCheck.takenHour} už není volný` };
         }
 
         for (let h = startHour; h < startHour + duration; h++) {
@@ -3335,7 +3342,40 @@ function setupAPIRoutes() {
     // from. requireFeature FIRST, before rate limiters/csrf/validation,
     // matching every other gated route in this file.
     app.post(`${api}/reservations/send-code`, requireFeature("reservations"), requireSmsAvailable, security.smsIpLimiter, security.smsPhoneLimiter, V.validate(V.sendCodeSchema), async (req, res) => {
-        const { phone, tableName, dateStr, dayIndex, startHour, duration, guestName, order, orderTotal, guests } = req.body || {};
+        const { phone, tableName, dateStr, startHour, duration, guestName, order, orderTotal, guests } = req.body || {};
+
+        // SECURITY (2026-08-09 review, fix 1): `dayIndex` is DERIVED from
+        // dateStr, never read from the body — note it is destructured away
+        // above. It was previously trusted after only a 0-6 range check,
+        // which bought two bugs at once:
+        //   - a Saturday dateStr paired with Monday's dayIndex was checked
+        //     against MONDAY's open/hours rules, so a weekday the owner had
+        //     closed could still be booked; and
+        //   - the booking was then written to data[dateStr][thatIndex],
+        //     while renderer.js reads data[dateStr][realWeekdayIndex] — so
+        //     the slot still showed as free to everyone afterwards. An
+        //     invisible double-booking, which the restaurant only discovers
+        //     when two parties arrive for one table.
+        // isReservationSlotOpen derives it the same way and no longer takes
+        // it as a parameter at all; this local is only for the WRITE.
+        const dayIndex = timetable.dayIndexFromDateStr(dateStr);
+        if (dayIndex === null) return res.status(400).json({ error: "Neplatné datum." });
+
+        // A dayIndex that disagrees with its own date is REFUSED, not
+        // quietly corrected. Every real client computes this field from the
+        // date exactly as the line above does — renderer.js's
+        // getDayIndexFromDateString parses "YYYY-MM-DD" at local midnight,
+        // so the weekday it derives is the same in any timezone, on any
+        // build, including pages served from the service worker's precache.
+        // That makes a mismatch something no honest request can produce, and
+        // an attempt to book one weekday under another weekday's rules is
+        // worth failing loudly rather than absorbing: silently rewriting it
+        // would hand the caller a booking at a time they did not ask for.
+        // Cheap, too — this is ahead of the SMS spend.
+        const claimedDayIndex = (req.body || {}).dayIndex;
+        if (claimedDayIndex !== undefined && Number(claimedDayIndex) !== dayIndex) {
+            return res.status(400).json({ error: "Datum a den v týdnu si neodpovídají." });
+        }
 
         // SECURITY: dayIndex/startHour/duration are already type/range-
         // checked by V.sendCodeSchema (0–6 / 0–23 / 1–24) before this
@@ -3353,7 +3393,7 @@ function setupAPIRoutes() {
         // is the actual authority; checking this early specifically avoids
         // spending real SMS money on a booking that verify-and-book would
         // reject anyway.
-        const slotCheck = settingsStore.isReservationSlotOpen(settingsStore.getSettings(), dateStr, dayIndex, startHour, duration);
+        const slotCheck = settingsStore.isReservationSlotOpen(settingsStore.getSettings(), dateStr, startHour, duration);
         if (!slotCheck.ok) return res.status(400).json({ error: slotCheck.reason });
 
         // Floorplan (design doc §7.3): the party-size/capacity check for the
@@ -3479,8 +3519,12 @@ function setupAPIRoutes() {
         // write, so it's the last and most important place this is
         // enforced; the client UI and the send-code check above are both
         // advisory only.
-        const { dateStr, dayIndex, startHour, duration } = pending.payload;
-        const slotCheck = settingsStore.isReservationSlotOpen(settingsStore.getSettings(), dateStr, dayIndex, startHour, duration);
+        // dayIndex is NOT re-read here: the payload's copy was derived from
+        // dateStr at send-code time (fix 1) and isReservationSlotOpen
+        // derives its own from the same dateStr, so there is nothing left
+        // for the two to disagree about.
+        const { dateStr, startHour, duration } = pending.payload;
+        const slotCheck = settingsStore.isReservationSlotOpen(settingsStore.getSettings(), dateStr, startHour, duration);
         if (!slotCheck.ok) return res.status(400).json({ error: slotCheck.reason });
 
         try {
