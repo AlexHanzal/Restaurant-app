@@ -196,6 +196,7 @@ const V = require("./validation"); // input validation (zod schemas + validate()
 const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/sales — see sales-stats.js
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
 const timetable = require("./timetable"); // pure date/slot-occupancy rules shared with the customer-facing availability logic — see timetable.js
+const reservationCancel = require("./reservation-cancel"); // guest self-cancellation: token + refusal policy — see reservation-cancel.js
 const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
 const routing = require("./routing"); // pure batching/ranking algorithm — see its header
@@ -3294,6 +3295,12 @@ function setupAPIRoutes() {
             return { ok: false, error: `Slot ${rangeCheck.takenHour} už není volný` };
         }
 
+        // Guest self-cancellation: ONE token for the whole booking, written
+        // onto every hour, so cancelling is "delete every slot with this
+        // token" rather than arithmetic over startHour/duration. Secret —
+        // see reservation-cancel.js's header.
+        const cancelToken = reservationCancel.newToken();
+
         for (let h = startHour; h < startHour + duration; h++) {
             data.data[dateStr][dayIndex][h] = {
                 content: guestName,
@@ -3307,6 +3314,7 @@ function setupAPIRoutes() {
                 // booking is gone. `reminderSent` starts unset/false and is
                 // flipped once the reminder actually goes out.
                 ...(phone ? { phone } : {}),
+                cancelToken,
                 // Floorplan (design doc §7.3): party size, stored next to
                 // `content`/`phone` so it's available wherever the rest of
                 // the slot's customer data is (admin table detail, kitchen
@@ -3325,7 +3333,7 @@ function setupAPIRoutes() {
         // no food doesn't, so only broadcast when there's actually an
         // order attached.
         if (order && order.length > 0) broadcastBoardEvent();
-        return { ok: true };
+        return { ok: true, cancelToken };
     }
 
     // SECURITY: SMS costs real money and can be used to bomb a victim's

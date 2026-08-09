@@ -306,4 +306,23 @@ describe("reservation booking flow", () => {
         const ok = await book(server, { dateStr: target, startHour: 9, guestName: "Lucie Krátká" });
         assert.strictEqual(ok.res.status, 200, JSON.stringify(ok.body));
     });
+
+    test("every hour of a booking carries one shared cancel token", async () => {
+        const target = dateStrOffset(3);
+        const out = await book(server, { dateStr: target, startHour: 3, duration: 2, guestName: "Anna Bílá" });
+        assert.strictEqual(out.res.status, 200, JSON.stringify(out.body));
+
+        const record = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+        const day = record.data[target][dayIndexOf(target)];
+
+        assert.match(day[3].cancelToken, /^[A-Za-z0-9_-]{22}$/);
+        assert.strictEqual(day[3].cancelToken, day[4].cancelToken, "both hours belong to one booking");
+    });
+
+    test("the cancel token is never published by the public timetable route", async () => {
+        const res = await fetch(`${server.api}/timetables/${encodeURIComponent(TABLE_NAME)}`);
+        assert.strictEqual(res.status, 200);
+        const body = await res.text();
+        assert.ok(!body.includes("cancelToken"), "cancelToken must not appear in the public payload");
+    });
 });
