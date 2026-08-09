@@ -280,11 +280,21 @@ function findBooking(records, token) {
     return null;
 }
 
-// When does this booking start, as a local Date?
+// When does this booking start, as a local Date? null if the stored date is
+// not a real one.
+//
+// CORRECTED after Task 1's review: splitting the string by hand produced
+// `new Date(NaN, ...)` for a junk date key, and every comparison against an
+// Invalid Date is false — so canCancel's "already started" check was silently
+// skipped and it returned ok:true. It failed OPEN. timetable.parseDateStr
+// does the validated parse (including the round-trip check that catches
+// "2026-02-29", which JS rolls over to March 1) and is itself
+// dependency-free, so reusing it costs this module nothing.
 function bookingStart(booking) {
-    const hour = booking.hourKeys[0] + START_HOUR_OFFSET;
-    const [y, m, d] = booking.dateStr.split("-").map(Number);
-    return new Date(y, m - 1, d, hour, 0, 0, 0);
+    const date = timetable.parseDateStr(booking.dateStr);
+    if (!date) return null;
+    date.setHours(booking.hourKeys[0] + START_HOUR_OFFSET, 0, 0, 0);
+    return date;
 }
 
 // The whole refusal policy, in evaluation order. Pure function of the
