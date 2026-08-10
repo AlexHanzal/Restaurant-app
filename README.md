@@ -43,6 +43,29 @@ hash at cost 12 (the shape is `{ id, abbreviation, password, name, isAdmin,
 isDriver }` — see `src/server/auth.js` and the `seedAdminUser` helper in
 `tests/smoke/table-orders.test.js` for a working example).
 
+### Když někdo odejde (deaktivace účtu)
+
+V **Uživatelé** má každý účet tlačítka **Heslo** a **Deaktivovat**.
+
+Deaktivace udělá dvě věci naráz: účet se už nepřihlásí, a *okamžitě se odhlásí
+i tam, kde je právě přihlášený* — tablet u baru, mobil řidiče. Nečeká se, až
+vyprší dvanáctihodinové přihlášení. Stejně se chová i změna hesla: po ní jsou
+všechna ostatní zařízení odhlášena.
+
+Účty se nemažou, jen vypínají. Historie na ně odkazuje (u každé rozvezené
+objednávky je uloženo, který řidič ji převzal), takže smazání řádku by tyhle
+odkazy rozbilo a nic navíc by nepřineslo. Deaktivaci lze kdykoli vrátit —
+původní přihlášení se ale neobnoví, člověk se musí přihlásit znovu.
+
+Vlastní účet deaktivovat nelze. To je zároveň jediná pojistka proti tomu, aby
+se restaurace vyklikala z vlastního administračního rozhraní: dokud tuhle akci
+provádí přihlášený administrátor, vždycky aspoň jeden aktivní zůstane.
+
+Technicky: `active: false` na záznamu účtu plus `tokenVersion`, které
+`requireAuth` porovnává při každém požadavku (`src/server/auth.js`). Účty
+založené dřív než tahle funkce nemají ani jedno pole a fungují dál beze změny —
+chybějící hodnoty se čtou jako „aktivní, verze 0".
+
 ## Nasazení pro další restauraci
 
 Všechno, co se liší restauraci od restaurace, je v jednom souboru:

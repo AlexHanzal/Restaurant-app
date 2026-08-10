@@ -238,6 +238,14 @@ const {
     COOKIE_NAME: AUTH_COOKIE_NAME,
 } = require("./auth");
 
+// Namespace import alongside the destructuring above, for the account-
+// lifecycle half of the module (resolveAccount / isDisabled /
+// sessionMatchesAccount / revokeSessions / ACCOUNT_COLLECTIONS — see
+// finding N3 in docs/2026-08-10-architecture-security-review.md). Those read
+// better qualified at the call site: `auth.revokeSessions(...)` says what it
+// touches, where a bare `revokeSessions(...)` among 40 other imports does not.
+const auth = require("./auth");
+
 // Feature gate. Passes when AT LEAST ONE of the named features is on — the
 // kitchen board needs that, since GET /kitchen/orders serves table orders
 // and delivery orders alike and must survive `pos: false`.
@@ -5133,11 +5141,26 @@ function setupAPIRoutes() {
                 return res.status(401).json({ error: "Nesprávné jméno nebo heslo" });
             }
 
+            // Same deactivation refusal, same reasoning, as /users/login below.
+            if (found.active === false) {
+                security.logLoginAudit({ scope, identifier: username, success: false, ip, reason: "inactive" });
+                return res.status(401).json({ error: "Nesprávné jméno nebo heslo" });
+            }
+
             security.clearFailedLogins(scope, username);
             security.logLoginAudit({ scope, identifier: username, success: true, ip });
 
             const { password: _, ...safe } = found;
-            issueSessionCookie(res, { id: found.id, name: found.name, isAdmin: false, isDriver: true });
+            issueSessionCookie(res, {
+                id: found.id,
+                name: found.name,
+                isAdmin: false,
+                isDriver: true,
+                // Carried through so this session is revocable the same way a
+                // /users/login session is — without it every driver cookie
+                // would claim version 0 and survive a deactivation bump.
+                tokenVersion: found.tokenVersion,
+            });
             res.json(safe);
         } catch (e) {
             console.error("Driver login error:", e);
@@ -5233,10 +5256,30 @@ function setupAPIRoutes() {
     // should see the unredacted record, since inner.js/kitchen.js/driver.js
     // sessions all legitimately need real guest names/phones/preorders to do
     // their job.
+    // ACCOUNT LIFECYCLE (review 2026-08-10, finding N3): this helper reads the
+    // cookie itself instead of going through requireAuth, so it has to repeat
+    // requireAuth's account re-check by hand — otherwise it becomes the way a
+    // disabled or revoked session stays useful. That matters concretely: the
+    // one caller below is GET /timetables/:name, where "is this a staff
+    // session?" decides whether the response carries guest names, phones and
+    // preorders or the whitelisted occupancy-only view. A deactivated waiter's
+    // cookie must not be what answers that question.
     function getAuthenticatedUserIfAny(req) {
         const token = req.cookies?.[AUTH_COOKIE_NAME];
-        const user = token && verifyToken(token);
-        return user || null;
+        const claims = token && verifyToken(token);
+        if (!claims) return null;
+
+        const resolved = auth.resolveAccount(claims.id);
+        if (!resolved) return null;
+        if (auth.isDisabled(resolved.record)) return null;
+        if (!auth.sessionMatchesAccount(claims, resolved.record)) return null;
+
+        // Flags off the stored record, not the claims — same reasoning as
+        // effectiveUser() in auth.js, and what getAdminUserIfAny() below
+        // depends on for a demotion to take effect without a re-login.
+        return resolved.scope === "driver"
+            ? { id: resolved.record.id, name: resolved.record.name, isAdmin: false, isDriver: true }
+            : { id: resolved.record.id, name: resolved.record.name, isAdmin: !!resolved.record.isAdmin, isDriver: !!resolved.record.isDriver };
     }
 
     // Same non-gating pattern as getAuthenticatedUserIfAny above, narrowed to
@@ -5517,6 +5560,19 @@ function setupAPIRoutes() {
                 return res.status(401).json({ error: "Nesprávné jméno nebo heslo" });
             }
 
+            // ACCOUNT LIFECYCLE (finding N3): a deactivated account gets the
+            // SAME 401 as a wrong password, and gets it only AFTER the bcrypt
+            // compare above has already run. Checking `active` earlier would
+            // answer in a few microseconds instead of ~250ms and hand back a
+            // clean "this abbreviation exists but is switched off" timing
+            // oracle — undoing the enumeration hardening dummyCompare() exists
+            // to provide. The audit log carries the real reason, which is
+            // where staff can see it; the response does not.
+            if (found.active === false) {
+                security.logLoginAudit({ scope, identifier: abbreviation, success: false, ip, reason: "inactive" });
+                return res.status(401).json({ error: "Nesprávné jméno nebo heslo" });
+            }
+
             security.clearFailedLogins(scope, abbreviation);
             security.logLoginAudit({ scope, identifier: abbreviation, success: true, ip });
 
@@ -5569,6 +5625,123 @@ function setupAPIRoutes() {
         const { password: _, ...safe } = user;
         res.json(safe);
     });
+
+    // ── ACCOUNT LIFECYCLE (review 2026-08-10, finding N3) ────────────────
+    //
+    // Before these four routes, accounts were create-only: there was no way
+    // to disable one, no way to change a password, and requireAuth never
+    // re-read the user table — so offboarding a waiter or a driver meant
+    // editing SQLite by hand, and even that left their session working for
+    // the rest of its 12 hours. In a business with the staff turnover of a
+    // restaurant that is the softest edge in the whole system.
+    //
+    // DEACTIVATE, NOT DELETE, and that is deliberate. Historical records point
+    // at these ids — `claimedBy` on every delivery order a driver ever took,
+    // and the login audit's own trail — so a hard delete would orphan real
+    // references to buy nothing the `active` flag does not already give. It is
+    // also reversible, which matters the first time someone deactivates the
+    // wrong row. If a hard delete is ever genuinely wanted (an account created
+    // by mistake, same day, never used), it should be its own route with its
+    // own "nothing references this" check rather than a flag on this one.
+
+    // Shared by all four routes below. `scope` picks the collection; the
+    // caller has already been through requireAdmin.
+    function accountRoute(collection, label, handler) {
+        return async (req, res) => {
+            const account = db.get(collection, req.params.id);
+            if (!account) return res.status(404).json({ error: `${label} nenalezen` });
+            return handler(req, res, account);
+        };
+    }
+
+    app.post(`${api}/users/:id/active`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsId), V.validate(V.setActiveSchema),
+        accountRoute(COL.users, "Uživatel", (req, res, account) => {
+            const { active } = req.body;
+
+            // REFUSING SELF-DEACTIVATION IS THE WHOLE LOCKOUT GUARANTEE, and
+            // it is worth spelling out why nothing else is needed. The obvious
+            // second check — "refuse if this is the last active admin" — is
+            // unreachable code here: requireAdmin above has already
+            // established that the CALLER is an active admin, and the line
+            // below establishes that the caller is not the target, so another
+            // active admin (the caller) always exists at this point. Writing
+            // that check anyway would be a rule nobody could ever trigger,
+            // which is worse than no rule: it reads as protection and is not.
+            //
+            // What actually keeps the door open is this single line plus the
+            // absence of any route that can demote an admin. If a demotion
+            // route is ever added, the last-admin count stops being redundant
+            // and has to come back — in BOTH routes.
+            if (!active && account.id === req.user.id) {
+                return res.status(409).json({ error: "Nemůžete deaktivovat vlastní účet." });
+            }
+
+            const updated = db.set(COL.users, account.id, {
+                ...account,
+                active,
+                // Deactivating must END the sessions that account already has
+                // open, not just stop new logins — the whole point is the
+                // tablet in the leaver's pocket. Reactivating does not bump:
+                // there is nothing to revoke, and leaving the number alone
+                // keeps it a count of revocations rather than of edits.
+                ...(active ? {} : { tokenVersion: (Number(account.tokenVersion) || 0) + 1 }),
+            });
+
+            console.log(`👤 Účet ${account.abbreviation} ${active ? "aktivován" : "deaktivován"} (admin: ${req.user.name})`);
+            const { password: _, ...safe } = updated;
+            res.json(safe);
+        }));
+
+    app.post(`${api}/users/:id/password`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsId), V.validate(V.setPasswordSchema),
+        accountRoute(COL.users, "Uživatel", async (req, res, account) => {
+            const hashed = await hashPassword(req.body.password);
+            // Re-read: hashPassword is a real await (bcrypt cost 12, ~250ms),
+            // and `account` predates it. Same reasoning as db.patch's header —
+            // only the two fields this request owns get written.
+            const updated = db.patch(COL.users, account.id, {
+                password: hashed,
+                // A password change ends every other session on the account.
+                // That is the point of changing it: if it is being reset
+                // because the old one leaked, leaving the leaked session
+                // logged in would make the reset cosmetic.
+                tokenVersion: (Number(account.tokenVersion) || 0) + 1,
+            });
+            if (!updated) return res.status(404).json({ error: "Uživatel nenalezen" });
+
+            console.log(`🔑 Heslo účtu ${account.abbreviation} změněno (admin: ${req.user.name})`);
+            const { password: _, ...safe } = updated;
+            res.json(safe);
+        }));
+
+    // Drivers created by POST /drivers live in their own collection and log in
+    // via POST /drivers/login, so they need the same two routes. No
+    // last-admin guard here — a driver account is never an admin.
+    app.post(`${api}/drivers/:id/active`, requireFeature("delivery"), csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsId), V.validate(V.setActiveSchema),
+        accountRoute(COL.drivers, "Řidič", (req, res, account) => {
+            const { active } = req.body;
+            const updated = db.set(COL.drivers, account.id, {
+                ...account,
+                active,
+                ...(active ? {} : { tokenVersion: (Number(account.tokenVersion) || 0) + 1 }),
+            });
+            console.log(`🚗 Řidič ${account.username} ${active ? "aktivován" : "deaktivován"} (admin: ${req.user.name})`);
+            const { password: _, ...safe } = updated;
+            res.json(safe);
+        }));
+
+    app.post(`${api}/drivers/:id/password`, requireFeature("delivery"), csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsId), V.validate(V.setPasswordSchema),
+        accountRoute(COL.drivers, "Řidič", async (req, res, account) => {
+            const hashed = await hashPassword(req.body.password);
+            const updated = db.patch(COL.drivers, account.id, {
+                password: hashed,
+                tokenVersion: (Number(account.tokenVersion) || 0) + 1,
+            });
+            if (!updated) return res.status(404).json({ error: "Řidič nenalezen" });
+
+            console.log(`🔑 Heslo řidiče ${account.username} změněno (admin: ${req.user.name})`);
+            const { password: _, ...safe } = updated;
+            res.json(safe);
+        }));
 }
 
 // ============================================================================

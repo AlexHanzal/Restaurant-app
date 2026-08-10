@@ -969,6 +969,25 @@ const createDriverSchema = z.object({
     password: passwordSchema(200, 4, "Heslo je příliš krátké"),
 }).strict();
 
+// ── ACCOUNT LIFECYCLE SCHEMAS ────────────────────────────────────────────
+// Accounts used to be create-only: no route could deactivate one or change
+// its password, so offboarding a waiter meant editing SQLite by hand. These
+// two bodies are the whole surface of the fix.
+//
+// `active` is a strict boolean rather than z.coerce.boolean() — unlike the
+// isAdmin/isDriver flags above, which are coerced because the admin form
+// posts checkbox values. This one is only ever sent by code, and coercion
+// here would quietly read the string "false" as TRUE, i.e. silently
+// reactivate an account somebody was trying to shut off.
+const setActiveSchema = z.object({ active: z.boolean({ error: "Chybí požadovaný stav účtu" }) }).strict();
+
+// Same bounds as createUserSchema/createDriverSchema's password: an admin
+// resetting a password must not be able to set one that creating the account
+// would have refused.
+const setPasswordSchema = z.object({
+    password: passwordSchema(200, 4, "Heslo je příliš krátké"),
+}).strict();
+
 // ── GOPAY WEBHOOK ─────────────────────────────────────────────────────────
 // Public, unauthenticated-by-design (GoPay calls it server-to-server); the
 // handler re-verifies status against GoPay's own API rather than trusting
@@ -1029,6 +1048,8 @@ module.exports = {
     driverLoginSchema,
     createUserSchema,
     createDriverSchema,
+    setActiveSchema,
+    setPasswordSchema,
     gopayWebhookBodySchema,
     driverRouteSchema,
     claimBatchSchema,

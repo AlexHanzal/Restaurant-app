@@ -32,9 +32,15 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const db = require("./db");
 
 const BCRYPT_COST = 12;
 const TOKEN_TTL = "12h";
+
+// Mirrored from server.js's SERVER_CONFIG.collections, the same way
+// security.js's LOGIN_AUDIT_COLLECTION is — server.js does not export them,
+// and a module that has to look an account up cannot wait to be handed one.
+const ACCOUNT_COLLECTIONS = { user: "users", driver: "drivers" };
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -158,12 +164,21 @@ function cookieOptions() {
 }
 
 // Call after successful login to issue the session cookie.
+//
+// `tokenVersion` is the revocation handle — see revokeSessions() and
+// requireAuth() below. It is copied from the stored account at login time and
+// compared against the stored value on every subsequent request, so bumping
+// the stored number invalidates every cookie already in the wild for that
+// account. Accounts written before this field existed have no `tokenVersion`;
+// `|| 0` on both sides of that comparison is what lets those sessions keep
+// working across the deploy instead of logging out the whole restaurant.
 function issueSessionCookie(res, user) {
     const token = signToken({
         id: user.id,
         name: user.name,
         isAdmin: !!user.isAdmin,
         isDriver: !!user.isDriver,
+        tokenVersion: Number(user.tokenVersion) || 0,
     });
     res.cookie(COOKIE_NAME, token, cookieOptions());
 }
@@ -218,13 +233,99 @@ function deriveSecret(purpose) {
     return crypto.createHmac("sha256", JWT_SECRET).update(purpose).digest("hex");
 }
 
+// ── ACCOUNT LIFECYCLE (review 2026-08-10, finding N3) ───────────────────
+//
+// requireAuth used to verify the cookie's signature and then trust whatever
+// the payload said — it never read the user table again. Combined with the
+// fact that no route could delete or disable an account, that made offboarding
+// impossible: a waiter or driver who left kept a working session for the rest
+// of its 12 hours, `GET /api/orders` (every customer's name, address and
+// phone) is guarded by requireAuth alone, and the only way to end it was to
+// rotate JWT_SECRET and log out the entire restaurant at once.
+//
+// Two fields close it, both defaulted so existing records need no migration:
+//
+//   active        `false` disables the account. Absent means active — every
+//                 record written before this feature.
+//   tokenVersion  bumped to revoke. Absent means 0 on both the record and the
+//                 claim, so sessions issued before this deploy stay valid
+//                 instead of the deploy itself logging everyone out.
+//
+// The cost is up to two primary-key lookups per authenticated request. `db.get`
+// is `WHERE collection = ? AND id = ?` against the table's PRIMARY KEY, not one
+// of the full-collection scans that dominate this codebase, so this is the one
+// per-request DB read that does not need the index work in the 2026-08-08
+// review's §5.1 to be affordable.
+
+// Which collection an id lives in cannot be derived from the claims: a user
+// with isDriver:true lives in `users`, while an account created by POST
+// /drivers lives in `drivers` and its session also carries isDriver:true. So
+// look in both, users first (the common case by far).
+function resolveAccount(id) {
+    if (!id) return null;
+    const user = db.get(ACCOUNT_COLLECTIONS.user, id);
+    if (user) return { record: user, scope: "user" };
+    const driver = db.get(ACCOUNT_COLLECTIONS.driver, id);
+    if (driver) return { record: driver, scope: "driver" };
+    return null;
+}
+
+// The session's effective identity, rebuilt from storage rather than from the
+// claims. This also closes a smaller staleness hole for free: demoting an
+// admin now takes effect on their next request instead of at their next login.
+//
+// Driver-collection records carry no isAdmin/isDriver fields of their own —
+// POST /drivers/login mints those flags at login time — so they are restated
+// here rather than read off the record, or requireDriver would start refusing
+// every legacy driver account.
+function effectiveUser({ record, scope }) {
+    if (scope === "driver") {
+        return { id: record.id, name: record.name, isAdmin: false, isDriver: true };
+    }
+    return { id: record.id, name: record.name, isAdmin: !!record.isAdmin, isDriver: !!record.isDriver };
+}
+
+function isDisabled(record) {
+    return record.active === false;
+}
+
+function sessionMatchesAccount(claims, record) {
+    return (Number(record.tokenVersion) || 0) === (Number(claims.tokenVersion) || 0);
+}
+
+// Bumps an account's tokenVersion, ending every session it has open. Returns
+// the updated record, or null if the account is gone. Callers: deactivation
+// and password change — both are moments where any session already open on
+// that account must stop working immediately, which is the whole point of the
+// field.
+function revokeSessions(collection, id) {
+    const account = db.get(collection, id);
+    if (!account) return null;
+    return db.set(collection, id, { ...account, tokenVersion: (Number(account.tokenVersion) || 0) + 1 });
+}
+
 // ── MIDDLEWARE ───────────────────────────────────────────────────────────
+
+// One wording for every "your session is no longer valid" case — expired
+// cookie, deleted account, disabled account, revoked token. Distinguishing
+// them would tell whoever holds a stale cookie exactly what happened to the
+// account behind it, and the frontend treats all 401s identically anyway
+// (apiFetch in inner.js/driver.js/kitchen.js bounces to the login gate).
+const SESSION_INVALID = { error: "Přihlášení je vyžadováno" };
 
 function requireAuth(req, res, next) {
     const token = req.cookies?.[COOKIE_NAME];
-    const user = token && verifyToken(token);
-    if (!user) return res.status(401).json({ error: "Přihlášení je vyžadováno" });
-    req.user = user;
+    const claims = token && verifyToken(token);
+    if (!claims) return res.status(401).json(SESSION_INVALID);
+
+    // The signature only proves this cookie was minted by us. Everything that
+    // could have changed about the account since then is checked here.
+    const resolved = resolveAccount(claims.id);
+    if (!resolved) return res.status(401).json(SESSION_INVALID);
+    if (isDisabled(resolved.record)) return res.status(401).json(SESSION_INVALID);
+    if (!sessionMatchesAccount(claims, resolved.record)) return res.status(401).json(SESSION_INVALID);
+
+    req.user = effectiveUser(resolved);
     next();
 }
 
@@ -280,4 +381,10 @@ module.exports = {
     requireStaff,
     COOKIE_NAME,
     deriveSecret,
+    // Account lifecycle (finding N3)
+    ACCOUNT_COLLECTIONS,
+    resolveAccount,
+    isDisabled,
+    sessionMatchesAccount,
+    revokeSessions,
 };

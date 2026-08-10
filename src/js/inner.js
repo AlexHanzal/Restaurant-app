@@ -3760,7 +3760,7 @@ async function renderUsersView() {
         const table = document.createElement('table');
         table.className = 'inn-bookings-table';
         table.innerHTML = `
-            <thead><tr><th>Jméno</th><th>Zkratka</th><th>Role</th></tr></thead>
+            <thead><tr><th>Jméno</th><th>Zkratka</th><th>Role</th><th>Stav</th><th></th></tr></thead>
             <tbody></tbody>
         `;
         const tbody = table.querySelector('tbody');
@@ -3770,11 +3770,40 @@ async function renderUsersView() {
                 u.isAdmin ? '<span class="inn-status-pill paid">Admin</span>' : '',
                 u.isDriver ? '<span class="inn-status-pill unpaid">Řidič</span>' : '',
             ].filter(Boolean).join(' ') || '<span class="inn-status-pill noorder">Uživatel</span>';
+
+            // `active` is absent on every account created before this feature
+            // — the server reads that as active, and so must this.
+            const isActive = u.active !== false;
+            const stateBadge = isActive
+                ? '<span class="inn-status-pill paid">Aktivní</span>'
+                : '<span class="inn-status-pill noorder">Deaktivován</span>';
+
             tr.innerHTML = `
                 <td>${escapeHtml(u.name)}</td>
                 <td>${escapeHtml(u.abbreviation)}</td>
                 <td>${roleBadges}</td>
+                <td>${stateBadge}</td>
+                <td class="inn-users-actions"></td>
             `;
+            if (!isActive) tr.style.opacity = '0.55';
+
+            // Buttons are built as elements with addEventListener rather than
+            // interpolated onclick attributes — same rule as every other table
+            // in this file, and it keeps the account id out of the markup.
+            const actions = tr.querySelector('.inn-users-actions');
+
+            const pwBtn = document.createElement('button');
+            pwBtn.className = 'inn-btn';
+            pwBtn.textContent = 'Heslo';
+            pwBtn.addEventListener('click', () => openUserPasswordModal(u));
+            actions.appendChild(pwBtn);
+
+            const stateBtn = document.createElement('button');
+            stateBtn.className = isActive ? 'inn-btn danger' : 'inn-btn';
+            stateBtn.textContent = isActive ? 'Deaktivovat' : 'Aktivovat';
+            stateBtn.addEventListener('click', () => setUserActive(u, !isActive));
+            actions.appendChild(stateBtn);
+
             tbody.appendChild(tr);
         });
         wrap.appendChild(table);
@@ -3828,6 +3857,91 @@ document.getElementById('userModalCreateBtn').addEventListener('click', async ()
         renderUsersView();
     } catch (e) {
         errorEl.textContent = 'Nepodařilo se vytvořit účet.';
+        errorEl.style.display = 'block';
+    }
+});
+
+// ── ACCOUNT LIFECYCLE (finding N3) ──────────────────────────────────────
+// Deactivating and password-resetting staff accounts. Both end every session
+// the account has open, which is the reason they exist — a leaver's tablet
+// must stop working now, not whenever their 12-hour cookie happens to expire.
+
+async function setUserActive(user, active) {
+    // Named in the prompt: this list is a table of similar-looking rows and
+    // the wrong click here logs a working shift out of the till.
+    const question = active
+        ? `Znovu aktivovat účet „${user.name}“?`
+        : `Deaktivovat účet „${user.name}“? Okamžitě se odhlásí na všech zařízeních a nebude se moci přihlásit.`;
+    if (!confirm(question)) return;
+
+    try {
+        const res = await apiFetch(`${API_URL}/users/${encodeURIComponent(user.id)}/active`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ active }),
+        });
+
+        if (!res.ok) {
+            // The server owns the refusal rules (last admin, self) and phrases
+            // them; showing its message beats guessing at one here.
+            const body = await res.json().catch(() => ({}));
+            showToast(body.error || 'Změna se nezdařila.', true);
+            return;
+        }
+
+        showToast(active ? 'Účet aktivován' : 'Účet deaktivován');
+        renderUsersView();
+    } catch (e) {
+        showToast('Změna se nezdařila.', true);
+    }
+}
+
+function openUserPasswordModal(user) {
+    document.getElementById('userPasswordModalId').value = user.id;
+    document.getElementById('userPasswordModalWho').textContent = `${user.name} (${user.abbreviation})`;
+    document.getElementById('userNewPasswordInput').value = '';
+    document.getElementById('userPasswordModalError').style.display = 'none';
+    document.getElementById('userPasswordModal').classList.add('active');
+}
+
+document.getElementById('userPasswordModalCancelBtn').addEventListener('click', () => {
+    document.getElementById('userPasswordModal').classList.remove('active');
+});
+document.getElementById('userPasswordModal').addEventListener('click', e => {
+    if (e.target.id === 'userPasswordModal') document.getElementById('userPasswordModal').classList.remove('active');
+});
+
+document.getElementById('userPasswordModalSaveBtn').addEventListener('click', async () => {
+    const id = document.getElementById('userPasswordModalId').value;
+    const password = document.getElementById('userNewPasswordInput').value;
+    const errorEl = document.getElementById('userPasswordModalError');
+    errorEl.style.display = 'none';
+
+    if (!password) {
+        errorEl.textContent = 'Zadejte nové heslo.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    try {
+        const res = await apiFetch(`${API_URL}/users/${encodeURIComponent(id)}/password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+        });
+
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            errorEl.textContent = body.error || 'Heslo se nepodařilo změnit.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        document.getElementById('userPasswordModal').classList.remove('active');
+        showToast('Heslo změněno — účet byl odhlášen na všech zařízeních');
+        renderUsersView();
+    } catch (e) {
+        errorEl.textContent = 'Heslo se nepodařilo změnit.';
         errorEl.style.display = 'block';
     }
 });

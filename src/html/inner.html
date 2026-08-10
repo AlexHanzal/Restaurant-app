@@ -171,6 +171,31 @@
     </div>
 </div>
 
+<!-- ── USERS: Change password modal (admin only) ─────────────────────────
+     Accounts used to be create-only — no password could be changed and no
+     account could be switched off — so this modal and the Stav/actions
+     columns in the users table are the admin half of that fix. -->
+<div class="inn-modal-overlay" id="userPasswordModal">
+    <div class="inn-modal-box">
+        <h3>Změnit heslo</h3>
+        <p id="userPasswordModalWho" style="color:var(--muted); font-size:0.9em; margin:0 0 12px;"></p>
+        <input type="hidden" id="userPasswordModalId">
+        <input type="hidden" id="userPasswordModalScope">
+        <div class="inn-field-group">
+            <label for="userNewPasswordInput">Nové heslo</label>
+            <input type="text" id="userNewPasswordInput" placeholder="Nové heslo">
+        </div>
+        <p style="color:var(--muted); font-size:0.8em; margin:0 0 10px;">
+            Změna hesla okamžitě odhlásí všechna zařízení, kde je účet přihlášený.
+        </p>
+        <p id="userPasswordModalError" style="color:var(--danger); font-size:0.85em; display:none; margin:0 0 10px;"></p>
+        <div class="inn-modal-actions">
+            <button class="inn-btn" id="userPasswordModalCancelBtn">Zrušit</button>
+            <button class="inn-btn primary" id="userPasswordModalSaveBtn">Uložit</button>
+        </div>
+    </div>
+</div>
+
 <!-- ── MENU: Add/Edit dish modal ──────────────────────────────────────── -->
 <div class="inn-modal-overlay" id="dishModal">
     <div class="inn-modal-box" style="width:460px;">
