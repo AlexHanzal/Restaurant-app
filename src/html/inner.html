@@ -178,14 +178,18 @@
 <div class="inn-modal-overlay" id="userPasswordModal">
     <div class="inn-modal-box">
         <h3>Změnit heslo</h3>
-        <p id="userPasswordModalWho" style="color:var(--muted); font-size:0.9em; margin:0 0 12px;"></p>
+        <!-- All three secondary lines in this modal share ONE size (0.85em,
+             the size the sibling userModal already uses for its error) and
+             differ by colour, not by a 5% step. Three sizes within 12% of
+             each other read as noise rather than as hierarchy. -->
+        <p id="userPasswordModalWho" style="color:var(--muted); font-size:0.85em; margin:0 0 12px;"></p>
         <input type="hidden" id="userPasswordModalId">
         <input type="hidden" id="userPasswordModalScope">
         <div class="inn-field-group">
             <label for="userNewPasswordInput">Nové heslo</label>
             <input type="text" id="userNewPasswordInput" placeholder="Nové heslo">
         </div>
-        <p style="color:var(--muted); font-size:0.8em; margin:0 0 10px;">
+        <p style="color:var(--muted); font-size:0.85em; margin:0 0 10px;">
             Změna hesla okamžitě odhlásí všechna zařízení, kde je účet přihlášený.
         </p>
         <p id="userPasswordModalError" style="color:var(--danger); font-size:0.85em; display:none; margin:0 0 10px;"></p>
