@@ -1,5 +1,23 @@
 # Guest Self-Cancellation Implementation Plan
 
+> **STATUS: complete, 2026-08-10.** All seven tasks landed. Two deviations from
+> the text below, both found while implementing:
+>
+> - **Task 4** proposed `req.query = result.data` in `validateQuery`. Express 5
+>   defines `req.query` as a getter with no setter, so that assignment either
+>   throws or silently no-ops — the shipped helper uses `Object.assign`, the
+>   same in-place mutation `validateParams` already used.
+> - **Task 6** used `__BASE_PATH__` in the page template. HTML pages are
+>   rendered by `brand.renderTokens`, which substitutes `{{BASE}}`; only
+>   `sw.js` uses the `__BASE_PATH__` form. The shipped page uses `{{BASE}}`.
+>
+> Task 7's browser pass also turned up a real bug the API tests could not see:
+> `.ds-btn { display: inline-flex }` overrode the `hidden` attribute, so the
+> confirm button was on screen before the booking had loaded and stayed there
+> after cancelling. Fixed globally with `[hidden] { display: none !important }`
+> in `design.css` — see the comment there; the same trap had already been
+> patched twice per-component in `delivery-page.css`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a guest cancel their own reservation from a one-tap link in the confirmation SMS, freeing the table without a phone call.
@@ -53,7 +71,7 @@
   - `canCancel(booking: Booking | null, now: Date): { ok: boolean, status: number, reason: string | null }`.
   - `START_HOUR_OFFSET: 7` — hourIndex 1-12 → 8:00-20:00.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/reservation-cancel.test.js`:
 
@@ -181,12 +199,12 @@ test("a booking on an earlier date is 409 even at a later hour", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test "tests/unit/reservation-cancel.test.js"`
 Expected: FAIL with `Cannot find module '../../src/server/reservation-cancel'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `src/server/reservation-cancel.js`:
 
@@ -331,12 +349,12 @@ module.exports = {
 };
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test "tests/unit/reservation-cancel.test.js"`
 Expected: PASS, all tests, no warnings.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/reservation-cancel.js tests/unit/reservation-cancel.test.js
@@ -355,7 +373,7 @@ git commit -m "feat(reservations): add the pure cancellation module"
 - Consumes: `reservation-cancel.newToken()` from Task 1.
 - Produces: every slot written by `applyBookingToTimetable` carries a `cancelToken`, and all hours of one booking share the SAME value. `applyBookingToTimetable` returns `{ ok: true, cancelToken }` so the SMS step in Task 5 can use it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/smoke/reservations.test.js`, inside the `describe("reservation booking flow")` block:
 
@@ -380,12 +398,12 @@ test("the cancel token is never published by the public timetable route", async 
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: FAIL — "every hour of a booking carries one shared cancel token" fails because `day[3].cancelToken` is `undefined`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `src/server/server.js`, add the require next to the other server modules (near `const timetable = require("./timetable");`):
 
@@ -416,12 +434,12 @@ Change the success return so the caller can put the token in the SMS:
         return { ok: true, cancelToken };
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: PASS, all tests including the two new ones.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/server.js tests/smoke/reservations.test.js
@@ -441,7 +459,7 @@ git commit -m "feat(reservations): issue a cancel token with every booking"
 - Consumes: nothing from earlier tasks.
 - Produces: `security.cancelIpLimiter` (express middleware); `V.cancelQuerySchema` (validates `{ t }`), `V.cancelBodySchema` (validates `{ token }`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/reservation-cancel-schema.test.js`:
 
@@ -462,12 +480,12 @@ test("cancel schemas accept a real token and reject junk", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test "tests/unit/reservation-cancel-schema.test.js"`
 Expected: FAIL — `Cannot read properties of undefined (reading 'safeParse')`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `src/server/validation.js`, near the other reservation schemas:
 
@@ -515,12 +533,12 @@ const cancelIpLimiter = rateLimit({
 
 Add `cancelIpLimiter` to `module.exports`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test "tests/unit/reservation-cancel-schema.test.js" && npm run test:smoke`
 Expected: PASS. `tests/smoke/api-rate-limit.test.js` asserts limiter ORDERING off `RATE_LIMITS` — if it fails, the new value sits in the wrong place relative to its neighbours; read that test's assertion and place `cancelIp` accordingly.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/security.js src/server/validation.js tests/unit/reservation-cancel-schema.test.js
@@ -539,7 +557,7 @@ git commit -m "feat(reservations): rate limiter and schemas for cancellation"
 - Consumes: `reservationCancel.findBooking/canCancel` (Task 1), `cancelToken` on slots (Task 2), `security.cancelIpLimiter` + `V.cancelQuerySchema`/`V.cancelBodySchema` (Task 3).
 - Produces: `GET /api/reservations/cancellation?t=` and `POST /api/reservations/cancel`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/smoke/reservations.test.js`. Add this helper next to the other flow helpers:
 
@@ -644,12 +662,12 @@ describe("reservation self-cancellation", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: FAIL — the summary request 404s because the route does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `src/server/server.js`, immediately after the `POST /reservations/verify-and-book` handler:
 
@@ -724,12 +742,12 @@ function validateQuery(schema) {
 
 and add `validateQuery` to `module.exports`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: PASS, all tests in both suites.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/server.js src/server/validation.js tests/smoke/reservations.test.js
@@ -748,7 +766,7 @@ git commit -m "feat(reservations): summary and cancel routes"
 - Consumes: `cancelToken` from `applyBookingToTimetable`'s return value (Task 2), the page route from Task 6 (URL shape only — the SMS is just a string, so this task does not depend on the page existing).
 - Produces: nothing later tasks consume.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the `describe("reservation self-cancellation")` suite:
 
@@ -795,12 +813,12 @@ function seedSettings(dbPath, resvOverrides = {}, notifOverrides = {}) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: FAIL — "confirmation SMS must contain a cancel link".
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `verify-and-book`, capture the token from the booking result:
 
@@ -835,12 +853,12 @@ then extend the confirmation SMS block:
             }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/server/server.js tests/smoke/reservations.test.js
@@ -861,7 +879,7 @@ git commit -m "feat(reservations): put the cancel link in the confirmation SMS"
 - Consumes: the two routes from Task 4.
 - Produces: `GET /reservation/zrusit`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to the `describe("reservation self-cancellation")` suite:
 
@@ -875,12 +893,12 @@ test("the cancellation page is served", async () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: FAIL — 404.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Create `src/html/zrusit.html`:
 
@@ -1015,12 +1033,12 @@ In `src/server/server.js`, next to the other page routes:
 
 No extra wiring is needed for `zrusit.js`: `express.static` serves the whole frontend directory, so `src/js/zrusit.js` is reachable at `/reservation/js/zrusit.js` the moment the file exists — same as every other page script. `ds-btn--danger` already exists in `design.css`, so the button needs no new CSS.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test "tests/smoke/reservations.test.js"`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/html/zrusit.html src/js/zrusit.js src/server/server.js tests/smoke/reservations.test.js
@@ -1033,7 +1051,7 @@ git commit -m "feat(reservations): the guest cancellation page"
 
 **Files:** none created; this task verifies the previous six.
 
-- [ ] **Step 1: Confirm each refusal rule is load-bearing**
+- [x] **Step 1: Confirm each refusal rule is load-bearing**
 
 For each of the three rules below, break it, run the smoke suite, confirm ONLY the expected test fails, then restore.
 
@@ -1047,20 +1065,20 @@ For each of the three rules below, break it, run the smoke suite, confirm ONLY t
 node --test "tests/smoke/reservations.test.js"
 ```
 
-- [ ] **Step 2: Run the full suite**
+- [x] **Step 2: Run the full suite**
 
 ```bash
 npm run test:unit && npm run test:smoke
 ```
 Expected: all pass, zero failures.
 
-- [ ] **Step 3: Drive the page in a real browser**
+- [x] **Step 3: Drive the page in a real browser**
 
 Start a throwaway instance on port 4399 against a temp `SQLITE_PATH`, book a reservation through the API, read the cancel link out of the log, open it, confirm the summary renders and the button cancels. Verify the slot is gone from the DB afterwards.
 
 Remember: the service worker caches aggressively — unregister it and clear caches if the page looks stale.
 
-- [ ] **Step 4: Commit any fixes**
+- [x] **Step 4: Commit any fixes**
 
 ```bash
 git add -A

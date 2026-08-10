@@ -7,6 +7,7 @@ Web application for a Czech restaurant: table reservations with SMS verification
 | Path | Who | What |
 |---|---|---|
 | `/reservation/app` | customers | table reservation (7 days, SMS-verified, optional food preorder) |
+| `/reservation/zrusit?t=…` | customers | one-tap self-cancellation, from the link in the confirmation SMS |
 | `/reservation/delivery` | customers | delivery ordering — cart, PSČ zone, delivery fee, polední menu, online/cash/card payment |
 | `/reservation/admin` | owner/staff | tables, menu (incl. sold-out + daily specials), sales, receipts, users, **Nastavení** (hours, closed days, pause, delivery rules, notifications, business identity) |
 | `/reservation/kitchen` | kitchen | ticket board for pending orders |

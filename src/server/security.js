@@ -57,6 +57,7 @@ const RATE_LIMITS = {
     tableOrderIp: 600,
     tableOrderPerTable: 12,
     tableStatusPerTable: 240,
+    cancelIp: 60,
 };
 
 // Generous backstop applied to the whole /api surface — catches scripted
@@ -205,6 +206,30 @@ const tableStatusLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req) => req.tableFileId || "unresolved-table",
+    message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
+});
+
+// ── GUEST SELF-CANCELLATION LIMITER ─────────────────────────────────────
+// Spec 2026-08-09 §6. NOT a brute-force defence: the token is 128 bits, so
+// guessing is not a threat model and no per-IP number would change that. What
+// this bounds is the WORK each lookup costs — findBooking() walks every
+// timetable record and every date inside it, the same full scan that put a
+// limiter in front of resolveTableToken().
+//
+// Keyed on the IP, unlike the table limiters, and that is the right key here
+// even though a restaurant's guests share one NAT address: the cancel link is
+// followed from the guest's own phone on mobile data, from wherever they are
+// when they decide not to come. This is not dining-room traffic and does not
+// need a venue-sized budget.
+//
+// 60 per 15 minutes is generous for the real flow (load the page, maybe
+// reload, confirm — three requests), while still making a scan-hammering
+// script pay.
+const cancelIpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: RATE_LIMITS.cancelIp,
+    standardHeaders: true,
+    legacyHeaders: false,
     message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
 });
 
@@ -411,6 +436,7 @@ module.exports = {
     tableOrderIpLimiter,
     tableOrderTableLimiter,
     tableStatusLimiter,
+    cancelIpLimiter,
     isAccountLocked,
     recordFailedLogin,
     clearFailedLogins,

@@ -2654,6 +2654,11 @@ function setupMiddleware() {
     const driverHtmlRoute = makePageRoute("driver.html");
     const kitchenHtmlRoute = makePageRoute("kitchen.html");
     const indexHtmlRoute = makePageRoute("index.html");
+    // Guest self-cancellation (spec 2026-08-09 §9). The token stays in the
+    // query string and is read by the page's own script — deliberately NOT
+    // rendered into the HTML as a token, so it never lands in a proxy log,
+    // a cached page body, or a "view source" screenshot.
+    const cancelHtmlRoute = makePageRoute("zrusit.html");
 
     const legalPageRoutesByPath = {
         "/obchodni-podminky": makePageRoute("obchodni-podminky.html"),
@@ -2756,7 +2761,7 @@ function setupMiddleware() {
     // here (before express.static) so the raw template still can never leak.
     const templateFileNames = [
         "index.html", "delivery.html", "driver.html",
-        "kitchen.html", "table.html",
+        "kitchen.html", "table.html", "zrusit.html",
         "obchodni-podminky.html", "ochrana-osobnich-udaju.html", "reklamace.html",
     ];
     const blockRawTemplate = (req, res) => res.status(404).send("Stránka nenalezena");
@@ -2897,7 +2902,10 @@ function setupMiddleware() {
         // registered — that page doubles as the admin panel (menu, users,
         // settings), and `pos: false` must only hide its POS-specific tabs,
         // never the whole page (see src/js/inner.js's data-feature loop).
-        if (brand.isEnabled("reservations")) app.get(`${base}/app`, indexHtmlRoute);
+        if (brand.isEnabled("reservations")) {
+            app.get(`${base}/app`, indexHtmlRoute);
+            app.get(`${base}/zrusit`, cancelHtmlRoute);
+        }
         app.get(`${base}/inner.html`, innerHtmlRoute);
         app.get(`${base}/admin`, innerHtmlRoute);
         if (brand.isEnabled("delivery")) {
@@ -2924,7 +2932,10 @@ function setupMiddleware() {
         app.use(express.static(frontendPath, staticOptions));
         // Same conditional registration as the base-path branch above — see
         // its comment for why inner.html/admin are unconditional.
-        if (brand.isEnabled("reservations")) app.get("/app", indexHtmlRoute);
+        if (brand.isEnabled("reservations")) {
+            app.get("/app", indexHtmlRoute);
+            app.get("/zrusit", cancelHtmlRoute);
+        }
         app.get("/inner.html", innerHtmlRoute);
         app.get("/admin", innerHtmlRoute);
         if (brand.isEnabled("delivery")) {
@@ -3550,8 +3561,24 @@ function setupAPIRoutes() {
                 const [y, m, d] = bookedDateStr.split("-");
                 const dateLabel = `${Number(d)}.${Number(m)}.${y}`;
                 const timeLabel = `${Number(bookedStartHour) + 7}:00`;
+
+                // Self-cancellation link (spec 2026-08-09 §10). Absolute URL
+                // built from the request origin, the same way
+                // gatewayCallbackUrls() derives GoPay's return URL.
+                //
+                // COST, accepted deliberately: this takes the message from one
+                // SMS segment to two. The text carries Czech diacritics, so it
+                // is UCS-2 encoded at 70 characters per segment rather than
+                // 160, and a URL cannot be made shorter than a URL. A freed
+                // table is worth more than a segment; the owner's existing
+                // smsReservationConfirmed toggle is the lever if they disagree,
+                // with the understood consequence that turning it off also
+                // means no cancel link is ever issued.
+                const origin = `${req.protocol}://${req.get("host")}`;
+                const cancelUrl = `${origin}${SERVER_CONFIG.basePath}/zrusit?t=${result.cancelToken}`;
+
                 notify
-                    .sendSms(cleanPhone, `Rezervace potvrzena: stůl ${tableName}, ${dateLabel} v ${timeLabel}.`)
+                    .sendSms(cleanPhone, `Rezervace potvrzena: stůl ${tableName}, ${dateLabel} v ${timeLabel}. Zrušit: ${cancelUrl}`)
                     .catch(e => console.error("Reservation-confirmed SMS crashed unexpectedly:", e));
             }
 
@@ -3560,6 +3587,69 @@ function setupAPIRoutes() {
             console.error(e);
             res.status(500).json({ error: "Nepodařilo se uložit rezervaci" });
         }
+    });
+
+    // ── GUEST SELF-CANCELLATION (spec 2026-08-09) ────────────────────────
+    //
+    // Two public routes, no session on either. The 22-character token in the
+    // request IS the credential, so there is no pre-existing session for a
+    // forged cross-site request to ride on and nothing for CSRF to protect —
+    // the same reasoning written out at length for the reorder routes below.
+    //
+    // cancelIpLimiter is not about guessing the token (128 bits of entropy);
+    // it bounds the full timetable scan each lookup costs. See security.js.
+    //
+    // Both refusal paths answer from reservationCancel.canCancel(), which is
+    // where the whole policy lives — these handlers only do lookup, write and
+    // broadcast.
+
+    // GET — what the confirmation page shows BEFORE the guest commits.
+    // Returns the minimum needed to recognise the booking and nothing more:
+    // no guest name, no phone, no party size, no order contents, no receiptId.
+    // The link arrives by SMS and may be forwarded, screenshotted, or sit in a
+    // message preview, so this response is written for an audience that might
+    // not be the person who booked.
+    app.get(`${api}/reservations/cancellation`, requireFeature("reservations"), security.cancelIpLimiter, V.validateQuery(V.cancelQuerySchema), (req, res) => {
+        const booking = reservationCancel.findBooking(db.list(COL.timetables), req.query.t);
+        const verdict = reservationCancel.canCancel(booking, new Date());
+
+        // No booking means there is nothing to describe — answer with the
+        // refusal itself (410), identical to what an already-cancelled token
+        // gets, rather than a 200 carrying an empty summary.
+        if (!booking) return res.status(verdict.status).json({ error: verdict.reason });
+
+        res.json({
+            tableName: booking.record.className,
+            dateStr: booking.dateStr,
+            startHour: booking.hourKeys[0],
+            endHour: booking.hourKeys[booking.hourKeys.length - 1],
+            hasOrder: booking.slots.some(s => Array.isArray(s.order) && s.order.length > 0),
+            isPaid: booking.slots.some(s => s.isPaid),
+            cancellable: verdict.ok,
+            reason: verdict.reason,
+        });
+    });
+
+    // POST — perform it. Deletes exactly the hour-slots carrying the token,
+    // leaving the record in the state the admin's own "Smazat rezervaci"
+    // produces. Nothing is written in their place.
+    app.post(`${api}/reservations/cancel`, requireFeature("reservations"), security.cancelIpLimiter, V.validate(V.cancelBodySchema), (req, res) => {
+        const booking = reservationCancel.findBooking(db.list(COL.timetables), req.body.token);
+        const verdict = reservationCancel.canCancel(booking, new Date());
+        if (!verdict.ok) return res.status(verdict.status).json({ error: verdict.reason });
+
+        const hours = booking.record.data[booking.dateStr][booking.dayIndex];
+        const hadOrder = booking.slots.some(s => Array.isArray(s.order) && s.order.length > 0);
+        for (const hourKey of booking.hourKeys) delete hours[hourKey];
+
+        db.set(COL.timetables, booking.record.fileId, booking.record);
+
+        // Mirrors applyBookingToTimetable's own broadcast on the way in —
+        // without this the kitchen board keeps showing a ticket for a booking
+        // that no longer exists, and a cook prepares food for an empty table.
+        if (hadOrder) broadcastBoardEvent();
+
+        res.json({ success: true });
     });
 
     // ============================================================================

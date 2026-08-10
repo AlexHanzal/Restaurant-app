@@ -194,6 +194,25 @@ function validateParams(schema) {
     };
 }
 
+// Same contract again, for req.query.
+//
+// Mutates in place rather than replacing the reference, and that is NOT just
+// stylistic symmetry with validateParams above: in Express 5 `req.query` is a
+// getter on the request prototype with no setter, so `req.query = parsed`
+// either throws (strict mode) or silently does nothing (sloppy mode), and the
+// silent case is the dangerous one — the route would then read the raw,
+// untrimmed value while looking like it had been validated.
+function validateQuery(schema) {
+    return (req, res, next) => {
+        const result = schema.safeParse(req.query ?? {});
+        if (!result.success) {
+            return res.status(400).json({ error: firstIssueMessage(result.error, "Neplatný parametr požadavku") });
+        }
+        Object.assign(req.query, result.data);
+        next();
+    };
+}
+
 // ── ROUTE PARAM SCHEMAS ──────────────────────────────────────────────────
 // Every :id/:fileId/:receiptId/:orderId/:gatewayTransactionId in server.js
 // is either a server-generated id (generateFileId() — alnum, optionally
@@ -435,6 +454,29 @@ const verifyAndBookSchema = z.object({
     phone: phoneSchema,
     code: reqStr(20, "Kód"),
 });
+
+// ── GUEST SELF-CANCELLATION SCHEMAS ──────────────────────────────────────
+// Spec 2026-08-09 §6. `cancelToken` is 16 random bytes as base64url, which is
+// exactly 22 characters from that alphabet and nothing else. Pinning the shape
+// here is not cosmetic: findBooking() walks EVERY timetable record, so a
+// malformed token must be turned away by the schema rather than paying for a
+// full scan first. Both routes are public, so this is the only gate in front
+// of that work besides the limiter.
+//
+// `.strict()` on both, unlike the reservation/reorder schemas above: those are
+// `.passthrough()` because their frontends send extra advisory fields, whereas
+// these two carry one value each and anything else is a client bug worth
+// hearing about.
+const cancelTokenField = z
+    .string({ error: "Chybí odkaz na rezervaci" })
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{22}$/, "Neplatný odkaz na rezervaci");
+
+// GET /reservations/cancellation?t=<token>
+const cancelQuerySchema = z.object({ t: cancelTokenField }).strict();
+
+// POST /reservations/cancel — { token }
+const cancelBodySchema = z.object({ token: cancelTokenField }).strict();
 
 // ── REORDER SCHEMAS ──────────────────────────────────────────────────────
 // docs/superpowers/specs/2026-07-25-reorder-design.md §10. Reuses the same
@@ -941,6 +983,7 @@ module.exports = {
     z,
     validate,
     validateParams,
+    validateQuery,
     rejectDangerousKeys,
     containsDangerousKeys,
 
@@ -970,6 +1013,8 @@ module.exports = {
     payOnlineReturnUrlSchema,
     sendCodeSchema,
     verifyAndBookSchema,
+    cancelQuerySchema,
+    cancelBodySchema,
     reorderSendCodeSchema,
     reorderVerifySchema,
     createTimetableSchema,

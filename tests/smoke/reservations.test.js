@@ -58,7 +58,7 @@ function reservationDays(overrides = {}) {
     return { ...days, ...overrides };
 }
 
-function seedSettings(dbPath, resvOverrides = {}) {
+function seedSettings(dbPath, resvOverrides = {}, notifOverrides = {}) {
     harness.seedRecord(dbPath, COL.settings, harness.SETTINGS_ID, {
         reservations: { paused: false, maxDaysAhead: 14, days: reservationDays(), ...resvOverrides },
         notifications: {
@@ -66,9 +66,12 @@ function seedSettings(dbPath, resvOverrides = {}) {
             smsOrderOnTheWay: false,
             // Off so the ONLY SMS in the child's log is the verification
             // code — otherwise readCode() could pick up a confirmation.
+            // The cancel-link case below turns this one back on deliberately,
+            // and restores it afterwards.
             smsReservationConfirmed: false,
             smsReservationReminder: false,
             emailEnabled: false,
+            ...notifOverrides,
         },
     });
 }
@@ -167,6 +170,22 @@ async function book(server, body = {}) {
 
     const verify = await post(server, "/reservations/verify-and-book", { phone, code: readCode(server, phone) });
     return { stage: "verify-and-book", res: verify, body: await verify.json().catch(() => ({})) };
+}
+
+// Books, then digs the booking's cancel token straight out of the DB. The
+// SMS-delivered link is asserted separately, by its own case below — reading
+// the token from storage here keeps every other cancellation case independent
+// of whether confirmation SMS happens to be switched on.
+async function bookAndGetToken(server, body = {}) {
+    const out = await book(server, body);
+    assert.strictEqual(out.res.status, 200, `booking failed at ${out.stage}: ${JSON.stringify(out.body)}`);
+
+    const dateStr = body.dateStr || TOMORROW;
+    const hour = body.startHour || 5;
+    const record = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+    const slot = record.data[dateStr][dayIndexOf(dateStr)][hour];
+    assert.ok(slot, `no slot written at ${dateStr} hour ${hour}`);
+    return slot.cancelToken;
 }
 
 // ── SUITE ────────────────────────────────────────────────────────────────
@@ -324,5 +343,173 @@ describe("reservation booking flow", () => {
         assert.strictEqual(res.status, 200);
         const body = await res.text();
         assert.ok(!body.includes("cancelToken"), "cancelToken must not appear in the public payload");
+    });
+});
+
+// ── GUEST SELF-CANCELLATION ──────────────────────────────────────────────
+// Its own spawned server, not a shared one with the suite above: both suites
+// spend from the same per-IP SMS budget (20/hour, and every request here comes
+// from 127.0.0.1), and the booking suite above is already close to it.
+describe("reservation self-cancellation", () => {
+    let server;
+
+    before(async () => {
+        server = await harness.start();
+        seedSettings(server.dbPath);
+        harness.seedRecord(server.dbPath, COL.timetables, TABLE_FILE_ID, tableRecord());
+    });
+
+    after(async () => { if (server) await server.stop(); });
+
+    test("the summary describes the booking without leaking who made it", async () => {
+        const token = await bookAndGetToken(server, { startHour: 5, guestName: "Jan Novák" });
+
+        const res = await fetch(`${server.api}/reservations/cancellation?t=${token}`);
+        assert.strictEqual(res.status, 200);
+        const body = await res.json();
+
+        assert.strictEqual(body.tableName, TABLE_NAME);
+        assert.strictEqual(body.dateStr, TOMORROW);
+        assert.strictEqual(body.startHour, 5);
+        assert.strictEqual(body.endHour, 5);
+        assert.strictEqual(body.cancellable, true);
+
+        // The link travels by SMS and may be forwarded or screenshotted, so
+        // the response is written for an audience that might not be the guest.
+        const raw = JSON.stringify(body);
+        assert.ok(!raw.includes("Jan Novák"), "no guest name");
+        assert.ok(!raw.includes("+420"), "no phone number");
+        assert.ok(!raw.includes(token), "never echo the token back");
+    });
+
+    test("cancelling frees the slot and is not repeatable", async () => {
+        const token = await bookAndGetToken(server, { startHour: 6, guestName: "Eva Malá" });
+
+        const first = await post(server, "/reservations/cancel", { token });
+        assert.strictEqual(first.status, 200, await first.text());
+
+        const record = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+        assert.ok(!record.data[TOMORROW][dayIndexOf(TOMORROW)][6], "the slot must be gone, not blanked");
+
+        const second = await post(server, "/reservations/cancel", { token });
+        assert.strictEqual(second.status, 410);
+        assert.match((await second.json()).error, /nebyla nalezena/i);
+    });
+
+    test("a multi-hour booking is cancelled whole, and only its own hours", async () => {
+        const target = dateStrOffset(2);
+        const day = dayIndexOf(target);
+
+        const token = await bookAndGetToken(server, { dateStr: target, startHour: 3, duration: 2, guestName: "Anna Bílá" });
+        // A neighbouring booking that must survive: it proves the delete is
+        // keyed on the token rather than on the hour arithmetic.
+        await bookAndGetToken(server, { dateStr: target, startHour: 5, guestName: "Tomáš Sedlák" });
+
+        assert.strictEqual((await post(server, "/reservations/cancel", { token })).status, 200);
+
+        const hours = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID).data[target][day];
+        assert.ok(!hours[3] && !hours[4], "both hours of the cancelled booking must be gone");
+        assert.strictEqual(hours[5].content, "Tomáš Sedlák", "the neighbouring booking must be untouched");
+    });
+
+    test("a freed slot can be booked again", async () => {
+        const token = await bookAndGetToken(server, { startHour: 7, guestName: "Petr Dvořák" });
+        assert.strictEqual((await post(server, "/reservations/cancel", { token })).status, 200);
+
+        const rebook = await book(server, { startHour: 7, guestName: "Karel Ryba" });
+        assert.strictEqual(rebook.res.status, 200, JSON.stringify(rebook.body));
+    });
+
+    test("a paid preorder is refused and the booking survives", async () => {
+        const token = await bookAndGetToken(server, { startHour: 8, guestName: "Lucie Krátká" });
+
+        // Mark it paid the way a completed payment would.
+        const record = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+        const slot = record.data[TOMORROW][dayIndexOf(TOMORROW)][8];
+        slot.order = [{ item: "Svíčková", price: 150, qty: 1 }];
+        slot.orderTotal = 150;
+        slot.isPaid = true;
+        harness.seedRecord(server.dbPath, COL.timetables, TABLE_FILE_ID, record);
+
+        const res = await post(server, "/reservations/cancel", { token });
+        assert.strictEqual(res.status, 409);
+        assert.match((await res.json()).error, /telefonicky/i);
+
+        const after = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+        assert.ok(after.data[TOMORROW][dayIndexOf(TOMORROW)][8], "a refused cancellation must not delete anything");
+    });
+
+    test("a booking that has already started is refused", async () => {
+        const token = await bookAndGetToken(server, { startHour: 9, guestName: "Marek Sýkora" });
+
+        // Move the booking into the past by re-keying it onto yesterday —
+        // cheaper and far less flaky than waiting for a clock.
+        const record = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+        const yesterday = dateStrOffset(-1);
+        const slot = record.data[TOMORROW][dayIndexOf(TOMORROW)][9];
+        delete record.data[TOMORROW][dayIndexOf(TOMORROW)][9];
+        record.data[yesterday] = [];
+        record.data[yesterday][dayIndexOf(yesterday)] = { 9: slot };
+        harness.seedRecord(server.dbPath, COL.timetables, TABLE_FILE_ID, record);
+
+        const res = await post(server, "/reservations/cancel", { token });
+        assert.strictEqual(res.status, 409);
+        assert.match((await res.json()).error, /proběhla/i);
+    });
+
+    test("an unknown token answers exactly like an already-cancelled one", async () => {
+        // Same shape, same status, same wording — the endpoint must not become
+        // an oracle for "is this token real".
+        const res = await post(server, "/reservations/cancel", { token: "aBcDeFgHiJkLmNoPqRsTuV" });
+        assert.strictEqual(res.status, 410);
+        assert.match((await res.json()).error, /nebyla nalezena/i);
+
+        const summary = await fetch(`${server.api}/reservations/cancellation?t=aBcDeFgHiJkLmNoPqRsTuV`);
+        assert.strictEqual(summary.status, 410);
+    });
+
+    test("a malformed token is rejected by the schema, before any scan", async () => {
+        for (const bad of ["nope", "", "a".repeat(200), "has spaces here!!!!!!"]) {
+            const res = await post(server, "/reservations/cancel", { token: bad });
+            assert.strictEqual(res.status, 400, `${JSON.stringify(bad)} must be a 400`);
+        }
+        assert.strictEqual((await fetch(`${server.api}/reservations/cancellation`)).status, 400, "a missing ?t= is a 400");
+    });
+
+    test("the confirmation SMS carries a link that actually works", async () => {
+        // The only case in this file that needs the confirmation SMS on.
+        seedSettings(server.dbPath, {}, { smsReservationConfirmed: true });
+
+        const { phone } = await sendCode(server, { startHour: 10, guestName: "Jana Horká" });
+        await new Promise(r => setTimeout(r, 50));
+        await post(server, "/reservations/verify-and-book", { phone, code: readCode(server, phone) });
+        await new Promise(r => setTimeout(r, 50));
+
+        const confirmations = server.logs().split("\n").filter(l => l.includes(phone) && l.includes("Zrušit"));
+        assert.ok(confirmations.length > 0, "the confirmation SMS must carry a cancel link");
+
+        const match = /zrusit\?t=([A-Za-z0-9_-]{22})/.exec(confirmations[confirmations.length - 1]);
+        assert.ok(match, `no cancel link in: ${confirmations[confirmations.length - 1]}`);
+
+        // End to end: the link out of the SMS resolves to this booking.
+        const res = await fetch(`${server.api}/reservations/cancellation?t=${match[1]}`);
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual((await res.json()).startHour, 10);
+
+        seedSettings(server.dbPath); // restore
+    });
+
+    test("the page is served and never echoes the token into the HTML", async () => {
+        const res = await fetch(`${server.baseUrl}/reservation/zrusit?t=aBcDeFgHiJkLmNoPqRsTuV`);
+        assert.strictEqual(res.status, 200);
+        const html = await res.text();
+        assert.match(html, /zrusit\.js/, "the page must load its script");
+        assert.ok(!html.includes("aBcDeFgHiJkLmNoPqRsTuV"), "the token must stay in the query string");
+        assert.ok(!html.includes("{{"), "every template token must be rendered");
+    });
+
+    test("the raw template is not reachable under /html", async () => {
+        const res = await fetch(`${server.baseUrl}/reservation/html/zrusit.html`);
+        assert.strictEqual(res.status, 404);
     });
 });

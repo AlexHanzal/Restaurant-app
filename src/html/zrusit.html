@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Zrušit rezervaci — {{BRAND_NAME}}</title>
+<link rel="icon" href="data:,">
+<!-- The link to this page is a capability token in a query string. Keeping it
+     out of search indexes costs nothing and stops a forwarded SMS from turning
+     into a crawlable URL. -->
+<meta name="robots" content="noindex, nofollow">
+<link rel="stylesheet" href="{{BASE}}/css/design.css">
+<link rel="stylesheet" href="{{BASE}}/css/reservation.css">
+{{BRAND_STYLE}}
+</head>
+<body>
+
+<header class="ds-page-header">
+  <span class="ds-wordmark">{{WORDMARK}}</span>
+  <span class="ds-page-header__section">Rezervace</span>
+</header>
+
+<main class="rsv-page">
+  <div class="rsv-hero">
+    <h1 class="ds-poster">Zrušit rezervaci<span class="ds-poster__stop">.</span></h1>
+  </div>
+
+  <!-- Everything below is filled in by zrusit.js from the summary endpoint.
+       The page ships with no booking data in it at all: the token stays in
+       the query string and is never rendered into this document, so it
+       cannot end up in a cached page body or a "view source" screenshot. -->
+  <section class="rsv-section">
+    <div class="ds-card" id="cancelCard">
+      <p class="rsv-cancel__status" id="cancelStatus">Načítám rezervaci…</p>
+
+      <dl class="rsv-cancel__summary" id="cancelSummary" hidden>
+        <dt class="ds-microlabel">Stůl</dt>
+        <dd id="cancelTable"></dd>
+        <dt class="ds-microlabel">Datum</dt>
+        <dd id="cancelDate"></dd>
+        <dt class="ds-microlabel">Čas</dt>
+        <dd id="cancelTime"></dd>
+      </dl>
+
+      <button type="button" class="ds-btn ds-btn--danger ds-btn--block" id="cancelConfirmBtn" hidden>
+        Zrušit rezervaci
+      </button>
+    </div>
+  </section>
+</main>
+
+<script src="{{BASE}}/config.js"></script>
+<script src="{{BASE}}/js/zrusit.js"></script>
+</body>
+</html>

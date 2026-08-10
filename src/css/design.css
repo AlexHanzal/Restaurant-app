@@ -141,6 +141,24 @@ img { max-width: 100%; display: block; }
    --block). Rectangular, uppercase, weight 800, letter-spaced. No radius,
    no shadow — a stamped label, not a soft pill.
    ============================================================================ */
+/* The `hidden` attribute is implemented by the UA stylesheet as
+   `display: none`, which ANY component rule setting `display` silently beats —
+   including .ds-btn just below. An element written as `<button class="ds-btn"
+   hidden>` is therefore fully visible, and the failure is invisible in review
+   because the markup plainly says hidden.
+
+   This bit twice already and was patched twice per-component
+   (.del-cartbar[hidden], .del-reorder-error[hidden] in delivery-page.css);
+   found a third time on the reservation-cancellation page, where the confirm
+   button showed before its booking had loaded and stayed up after the booking
+   was cancelled. Generalised here instead of a fourth local patch.
+
+   Safe by construction: this only affects elements that carry the attribute,
+   and an element with `hidden` that is on screen is a bug by definition. */
+[hidden] {
+  display: none !important;
+}
+
 .ds-btn {
   display: inline-flex;
   align-items: center;
