@@ -211,6 +211,56 @@ function set(collection, id, dataObj) {
     return dataObj;
 }
 
+// Inserts a NEW record only if `collection`/`id` is not already present, and
+// reports which happened — true if this call created the row, false if a row
+// was already there (regardless of who wrote it or when; the caller decides
+// what "already there" means).
+//
+// This is the primitive a caller uses to RESERVE an id before doing any work,
+// instead of checking then acting. set()'s ON CONFLICT DO UPDATE always
+// writes, so two concurrent get()-then-set() callers can both "win" the
+// check; ON CONFLICT DO NOTHING instead lets SQLite itself pick exactly one
+// winner, and better-sqlite3's synchronous .run() makes that pick final
+// before either caller's JS resumes — no interleaving is possible even if
+// the two calls originate from requests that are otherwise racing.
+//
+// idempotency.js is the motivating caller (finding L1): it reserves an
+// Idempotency-Key row BEFORE running the handler it guards, so two requests
+// carrying the same key can no longer both observe "not used yet".
+function insertIfAbsent(collection, id, dataObj) {
+    const info = getDb()
+        .prepare(`
+            INSERT INTO records (collection, id, data) VALUES (?, ?, ?)
+            ON CONFLICT(collection, id) DO NOTHING
+        `)
+        .run(collection, id, JSON.stringify(dataObj));
+    return info.changes > 0;
+}
+
+// Overwrites an existing record only if its CURRENT data is byte-identical to
+// the serialised form of `expectedDataObj`, and reports whether the swap
+// happened. Safe to compare by serialised equality because every record this
+// table holds is written exclusively through this module, so "the JSON I
+// read back is the JSON already there" is exactly the condition that matters
+// — nothing else in the process re-serialises the same object independently.
+//
+// This is an optimistic lock: two callers can both read the same row and
+// both decide it should be replaced (e.g. both conclude an old reservation
+// looks abandoned), but only the first UPDATE can still match the WHERE
+// clause once SQLite has committed it — the loser's WHERE matches zero rows
+// and its swap silently fails, which is the correct outcome for a loser.
+// idempotency.js uses this to steal an expired reservation without racing
+// another request doing the same thing at the same moment.
+function compareAndSwap(collection, id, expectedDataObj, newDataObj) {
+    const info = getDb()
+        .prepare(`
+            UPDATE records SET data = ?
+            WHERE collection = ? AND id = ? AND data = ?
+        `)
+        .run(JSON.stringify(newDataObj), collection, id, JSON.stringify(expectedDataObj));
+    return info.changes > 0;
+}
+
 // Applies `changes` on top of whatever is CURRENTLY stored — not on top of a
 // copy the caller read earlier. Returns the merged record, or null if the id
 // no longer exists (in which case nothing is written: a record deleted while
@@ -255,6 +305,8 @@ module.exports = {
     getDb, list, get, set, patch, remove, removeAll, DB_PATH,
     // Indexed lookups (H4)
     findBy, listByRange, INDEXED_FIELDS,
+    // Atomic reserve / steal primitives (L1 — idempotency.js)
+    insertIfAbsent, compareAndSwap,
     // Exported for one test only: that re-running it against an already-migrated
     // file does nothing, which is what every restart after the first one does.
     // getDb() memoises its connection, so nothing else can reach this path.
