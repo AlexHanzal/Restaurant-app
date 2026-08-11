@@ -3122,7 +3122,7 @@ function setupAPIRoutes() {
 
     app.get(`${api}/timetables/:name`, V.validateParams(V.paramsName), (req, res) => {
         try {
-            const found = db.list(COL.timetables).find(d => d.className === req.params.name);
+            const found = db.findBy(COL.timetables, "className", req.params.name);
             if (!found) return res.status(404).json({ error: "Not found" });
 
             // SECURITY (go-live Task 4 review fix): stays public (renderer.js
@@ -3166,7 +3166,7 @@ function setupAPIRoutes() {
     // can happen, which retires the class rather than this one instance of it.
     app.put(`${api}/timetables/:name`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsName), V.validate(V.timetablePutSchema), (req, res) => {
         try {
-            const found = db.list(COL.timetables).find(d => d.className === req.params.name);
+            const found = db.findBy(COL.timetables, "className", req.params.name);
             if (!found) return res.status(404).json({ error: "Not found" });
 
             // Dropped before the spread, so no ordering accident can reinstate
@@ -3243,7 +3243,7 @@ function setupAPIRoutes() {
     // POST — rename the guest on one booking.
     app.post(`${api}/timetables/:name/bookings/rename`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsName), V.validate(V.renameBookingSchema), (req, res) => {
         try {
-            const found = db.list(COL.timetables).find(d => d.className === req.params.name);
+            const found = db.findBy(COL.timetables, "className", req.params.name);
             if (!found) return res.status(404).json({ error: "Stůl nenalezen" });
 
             const resolved = resolveBookingSlot(found, req.body);
@@ -3280,7 +3280,7 @@ function setupAPIRoutes() {
     // DELETE /timetables above.
     app.delete(`${api}/timetables/:name/bookings`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsName), V.validate(V.deleteBookingSchema), (req, res) => {
         try {
-            const found = db.list(COL.timetables).find(d => d.className === req.params.name);
+            const found = db.findBy(COL.timetables, "className", req.params.name);
             if (!found) return res.status(404).json({ error: "Stůl nenalezen" });
 
             const resolved = resolveBookingSlot(found, req.body);
@@ -3316,7 +3316,7 @@ function setupAPIRoutes() {
                 return res.json({ success: true, deleted: "all" });
             }
 
-            const found = db.list(COL.timetables).find(d => d.className === name);
+            const found = db.findBy(COL.timetables, "className", name);
             if (!found) return res.status(404).json({ error: "Not found" });
 
             db.remove(COL.timetables, found.fileId);
@@ -3357,7 +3357,7 @@ function setupAPIRoutes() {
 
             if (!newName) return res.status(400).json({ error: "Název nesmí být prázdný" });
 
-            const found = db.list(COL.timetables).find(d => d.className === oldName);
+            const found = db.findBy(COL.timetables, "className", oldName);
             if (!found) return res.status(404).json({ error: "Stůl nenalezen" });
 
             // No-op rename: succeed without touching storage, so a save with an
@@ -3366,7 +3366,7 @@ function setupAPIRoutes() {
                 return res.json({ success: true, fileId: found.fileId, className: oldName, ordersMoved: 0 });
             }
 
-            const clash = db.list(COL.timetables).find(d => d.className === newName);
+            const clash = db.findBy(COL.timetables, "className", newName);
             if (clash) return res.status(409).json({ error: `Stůl „${newName}" už existuje` });
 
             const openOrders = db
@@ -3415,7 +3415,7 @@ function setupAPIRoutes() {
     // always false, so old data keeps behaving exactly as it did before
     // this parameter existed.
     async function applyBookingToTimetable({ tableName, dateStr, dayIndex, startHour, duration, guestName, order, orderTotal, phone, guests }) {
-        const data = db.list(COL.timetables).find(d => d.className === tableName);
+        const data = db.findBy(COL.timetables, "className", tableName);
         if (!data) return { ok: false, error: "Stůl nenalezen" };
 
         const seatLimit = typeof data.seats === "number" ? data.seats : Infinity;
@@ -3560,7 +3560,7 @@ function setupAPIRoutes() {
         // a stale page or a hand-crafted request; both deserve the cheap early
         // answer rather than the expensive late one.
         if (typeof guests === "number") {
-            const targetTable = db.list(COL.timetables).find(d => d.className === tableName);
+            const targetTable = db.findBy(COL.timetables, "className", tableName);
             if (targetTable && typeof targetTable.seats === "number" && guests > targetTable.seats) {
                 return res.status(400).json({ error: `Tento stůl má jen ${czechSeats(targetTable.seats)}` });
             }
@@ -5071,7 +5071,13 @@ function setupAPIRoutes() {
             // was wrong" confirms the id half was right.
             if (!fileId) return res.status(404).json({ error: "Neplatný kód stolu" });
 
-            const table = db.list(COL.timetables).find(t => t.fileId === fileId);
+            // H4: this was `db.list(COL.timetables).find(t => t.fileId === fileId)`
+            // — a full scan of every table, JSON-parsed, on every single public
+            // QR request, to find a record by a value that IS ITS PRIMARY KEY.
+            // Every write to this collection is `db.set(COL.timetables,
+            // <fileId>, ...)`, so an indexed lookup was always available and the
+            // scan bought nothing at all.
+            const table = db.get(COL.timetables, fileId);
             // 410 Gone, not 404: the token IS valid, the table was deleted.
             // A printed card outliving its table is a real operational case
             // and the guest page says something useful about it.
@@ -5312,7 +5318,7 @@ function setupAPIRoutes() {
         }
 
         try {
-            const found = db.list(COL.drivers).find(d => d.username === username);
+            const found = db.findBy(COL.drivers, "username", username);
             const ok = found ? await comparePassword(password, found.password) : await security.dummyCompare(password);
 
             if (!found || !ok) {
@@ -5613,8 +5619,19 @@ function setupAPIRoutes() {
     // datetime strings) filter on issuedAt.
     app.get(`${api}/receipts`, requireAuth, (req, res) => {
         try {
-            let receipts = db.list(COL.receipts);
             const { from, to } = req.query || {};
+            // H4: this used to be db.list(COL.receipts) — every receipt the
+            // restaurant has ever issued, JSON-parsed, on every request, before
+            // filtering in JavaScript. Receipts are the one collection that
+            // legally cannot be pruned, so at ~120/day it is the fastest-growing
+            // thing here and the only one guaranteed to keep growing forever.
+            //
+            // listByRange narrows via the index and deliberately returns a
+            // GENEROUS superset — the two filters below stay exactly as they
+            // were and remain the authority on what is in range. A candidate set
+            // that is a day wider than asked for costs nothing; one that is a
+            // second narrower would silently drop a receipt.
+            let receipts = db.listByRange(COL.receipts, "issuedAt", from, to);
             if (from) {
                 const fromDate = new Date(from);
                 if (!isNaN(fromDate.getTime())) receipts = receipts.filter(r => new Date(r.issuedAt) >= fromDate);
@@ -5731,7 +5748,7 @@ function setupAPIRoutes() {
         }
 
         try {
-            const found = db.list(COL.users).find(u => u.abbreviation === abbreviation);
+            const found = db.findBy(COL.users, "abbreviation", abbreviation);
             const ok = found ? await comparePassword(password, found.password) : await security.dummyCompare(password);
 
             if (!found || !ok) {
@@ -6244,6 +6261,13 @@ async function start() {
             if (removed) console.log(`🧹 Geokódovací cache: smazáno ${removed} záznamů`);
         } catch (e) {
             console.error("Geocode cache prune failed:", e);
+        }
+        try {
+            // H4: not personal data, but unbounded growth on a collection
+            // attachToBatch lists on every geocode.
+            reservationRetention.pruneBatches(db, COL.deliveryBatches);
+        } catch (e) {
+            console.error("Delivery batch prune failed:", e);
         }
     };
     pruneRetention();

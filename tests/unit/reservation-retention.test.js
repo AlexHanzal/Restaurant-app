@@ -202,3 +202,64 @@ test("a throwing db is swallowed rather than taking the restaurant down", () => 
     const fakeDb = { list: () => { throw new Error("disk on fire"); }, set: () => {} };
     assert.strictEqual(retention.prune(fakeDb, "timetables", { now: NOW }), 0);
 });
+
+// ── DELIVERY BATCHES (H4) ────────────────────────────────────────────────
+
+const batch = (id, daysAgoCreated, extra = {}) => ({
+    id,
+    createdAt: daysAgoCreated === null ? undefined
+        : new Date(NOW.getTime() - daysAgoCreated * 86400000).toISOString(),
+    orderIds: ["o1", "o2"],
+    status: "dissolved",
+    ...extra,
+});
+
+test("old batches are selected and recent ones are not", () => {
+    const ids = retention.selectExpiredBatchIds(
+        [batch("old", 40), batch("fresh", 2), batch("edge", 29)], { now: NOW });
+    assert.deepStrictEqual(ids, ["old"]);
+});
+
+test("an open batch is not spared by its status — only by its age", () => {
+    // Deliberate: a batch left "open" for 40 days is not a live delivery run,
+    // it is a leak. Age is the only signal that means anything here.
+    const ids = retention.selectExpiredBatchIds([batch("stuck-open", 40, { status: "open" })], { now: NOW });
+    assert.deepStrictEqual(ids, ["stuck-open"]);
+});
+
+test("a batch with no usable createdAt is kept", () => {
+    for (const bad of [null, undefined, "", "not-a-date"]) {
+        const rows = [{ id: "x", createdAt: bad === null ? undefined : bad, orderIds: [] }];
+        assert.deepStrictEqual(retention.selectExpiredBatchIds(rows, { now: NOW }), [],
+            `createdAt=${JSON.stringify(bad)} must be kept, not guessed at`);
+    }
+});
+
+test("the batch window is configurable and refuses nonsense", () => {
+    const rows = [batch("b", 45)];
+    assert.deepStrictEqual(retention.selectExpiredBatchIds(rows, { now: NOW, retentionDays: 30 }), ["b"]);
+    assert.deepStrictEqual(retention.selectExpiredBatchIds(rows, { now: NOW, retentionDays: 90 }), []);
+    for (const bad of [0, -1, NaN, "soon"]) {
+        assert.deepStrictEqual(retention.selectExpiredBatchIds(rows, { now: NOW, retentionDays: bad }), ["b"],
+            "a bad value falls back to the 30-day default, which still expires a 45-day-old batch");
+    }
+    assert.deepStrictEqual(retention.selectExpiredBatchIds(null), []);
+});
+
+test("pruneBatches removes exactly the expired ids", () => {
+    const rows = { old: batch("old", 40), fresh: batch("fresh", 1) };
+    const removed = [];
+    const fakeDb = {
+        list: () => Object.values(rows),
+        remove: (_c, id) => { removed.push(id); delete rows[id]; },
+    };
+
+    assert.strictEqual(retention.pruneBatches(fakeDb, "delivery_batches", { now: NOW }), 1);
+    assert.deepStrictEqual(removed, ["old"]);
+    assert.ok(rows.fresh, "the recent batch is still there");
+});
+
+test("pruneBatches swallows a failing db", () => {
+    const fakeDb = { list: () => { throw new Error("nope"); }, remove: () => {} };
+    assert.strictEqual(retention.pruneBatches(fakeDb, "delivery_batches", { now: NOW }), 0);
+});

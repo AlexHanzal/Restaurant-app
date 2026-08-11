@@ -146,9 +146,17 @@ const smsPhoneLimiter = rateLimit({
 // someone who photographed a real QR code, or a guest firing orders from
 // home. These two limiters are what caps the damage in that case.
 
-// Backstop on the work every public table route pays BEFORE it knows the
-// token is real — the db.list(timetables) scan inside resolveTableToken().
-// That is the only thing an IP budget can usefully bound here.
+// Backstop on the work every public table route pays BEFORE it knows the token
+// is real.
+//
+// H4 UPDATE: that work used to be a db.list(timetables) SCAN inside
+// resolveTableToken — every table, JSON-parsed, per request — and this limiter's
+// original justification was bounding it. The scan is gone: fileId is the row
+// key, so the lookup is now a primary-key read. The limiter stays, because
+// request volume from one address is still worth a ceiling and the signature
+// check itself costs something, but it is no longer standing between an
+// anonymous caller and an O(tables) parse. Do not re-tighten it on the strength
+// of the old reasoning.
 //
 // Sized for a VENUE, not for a person. Every guest in the dining room reaches
 // this server from the restaurant's single NAT address, so a per-IP number

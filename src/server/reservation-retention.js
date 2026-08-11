@@ -178,6 +178,56 @@ function prune(db, collection, opts = {}) {
     }
 }
 
+// ── DELIVERY BATCHES ─────────────────────────────────────────────────────
+// H4/N1(c). A batch is a grouping of order ids formed for one driver run. They
+// were written and never deleted — a closed one is only marked "dissolved" — so
+// the collection grew forever, and attachToBatch lists it on every geocode.
+//
+// Not personal data (order ids and a timestamp), which is why this sat with the
+// storage work rather than with the privacy pass. It is still unbounded growth
+// on a path an anonymous POST /orders reaches.
+//
+// 30 days: a batch is operationally dead within hours of being claimed, and the
+// only reason to keep one at all afterwards is looking back at how a delivery
+// run was grouped. The ORDERS survive regardless — they are their own
+// collection, and receipts point at them, not at batches.
+const BATCH_RETENTION_DAYS = parseInt(process.env.DELIVERY_BATCH_RETENTION_DAYS, 10) > 0
+    ? parseInt(process.env.DELIVERY_BATCH_RETENTION_DAYS, 10)
+    : 30;
+
+// Pure, same shape as the booking selector above. A batch with no usable
+// createdAt is KEPT: it is cheap to keep, and a batch a driver is mid-run on is
+// not something to delete on the strength of a missing timestamp.
+function selectExpiredBatchIds(rows, opts = {}) {
+    if (!Array.isArray(rows)) return [];
+
+    const now = opts.now instanceof Date ? opts.now : new Date();
+    const days = Number(opts.retentionDays);
+    const retentionDays = Number.isFinite(days) && days > 0 ? days : BATCH_RETENTION_DAYS;
+    const cutoff = now.getTime() - retentionDays * 24 * 60 * 60 * 1000;
+
+    const doomed = [];
+    for (const row of rows) {
+        if (!row || !row.id) continue;
+        const t = row.createdAt ? new Date(row.createdAt).getTime() : NaN;
+        if (!Number.isFinite(t)) continue; // undateable — keep
+        if (t < cutoff) doomed.push(row.id);
+    }
+    return doomed;
+}
+
+function pruneBatches(db, collection, opts = {}) {
+    try {
+        const expired = selectExpiredBatchIds(db.list(collection), opts);
+        for (const id of expired) db.remove(collection, id);
+        if (expired.length) console.log(`🧹 Rozvozové skupiny: smazáno ${expired.length} starých záznamů.`);
+        return expired.length;
+    } catch (e) {
+        console.error("Delivery batch prune failed:", e.message);
+        return 0;
+    }
+}
+
 module.exports = {
     RETENTION_DAYS,
     mustKeep,
@@ -186,4 +236,8 @@ module.exports = {
     isEmptyContainer,
     applyToRecord,
     prune,
+    // Delivery batches
+    BATCH_RETENTION_DAYS,
+    selectExpiredBatchIds,
+    pruneBatches,
 };
