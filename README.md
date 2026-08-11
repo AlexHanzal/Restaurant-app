@@ -31,17 +31,39 @@ Without Twilio/GoPay/SMTP credentials the app runs in fallback mode: SMS codes a
 
 ### The first admin account
 
-The app is installed together with a database that already contains one, so
-normally there is nothing to do here.
+A fresh install starts with a completely empty database, and `POST
+/api/users` — the only route that can create one — is itself behind
+`requireAdmin`. `initializeData()` seeds the menu, combos and settings
+singletons on first boot but deliberately never a user (an admin account is
+not a safe thing to seed with a fixed default password). Left alone, that is
+a dead end: nothing can ever satisfy `requireAdmin` on that database, so
+nobody can create the account that would.
 
-Worth knowing if you ever start from a genuinely empty `data/app.db`: there is
-no bootstrap script in this repo, and no way in through the API — `POST
-/api/users` is behind `requireAdmin`, and `initializeData()` seeds only the
-menu and combos singletons, never a user. Either restore a database that has
-an admin, or insert a row into the `users` collection by hand with a bcrypt
-hash at cost 12 (the shape is `{ id, abbreviation, password, name, isAdmin,
-isDriver }` — see `src/server/auth.js` and the `seedAdminUser` helper in
-`tests/smoke/table-orders.test.js` for a working example).
+`deploy/create-admin.js` is the way in:
+
+```bash
+node deploy/create-admin.js
+```
+
+It writes an admin account straight into SQLite via `src/server/db.js` (the
+same storage layer the app itself uses, so the record is byte-for-byte what
+`POST /api/users` would have produced — no hand-maintained bcrypt hash to
+keep in sync), asks for a name, a login abbreviation and a password
+interactively (the password is never accepted as a `--password` argument —
+it would end up in shell history and be visible to other users on the box
+via `ps`/Task Manager — only via the hidden prompt or a
+`CREATE_ADMIN_PASSWORD` env var for unattended installs), and refuses a
+duplicate abbreviation (it is the login identifier). It prints the resolved
+`SQLITE_PATH` before writing anything, which matters on a machine running
+several restaurants from one checkout. See `node deploy/create-admin.js
+--help` for the full option list, including `--force` for scripted runs and
+what happens if the database already has an admin (it warns and asks for
+confirmation rather than silently adding another — see the script's own
+"SECOND ADMIN GUARD" comment for the reasoning).
+
+Everything else about staff accounts — deactivating, resetting a password —
+goes through the admin panel once this first one exists; this script's only
+job is bootstrapping the very first login.
 
 ### Když někdo odejde (deaktivace účtu)
 
@@ -110,13 +132,14 @@ single SQLite file — would need addressing at the same time.
 explains why: `deploy/NASAZENI.md` (Ubuntu VPS runbook — systemd + Caddy +
 HTTPS + backups), `deploy/GO-LIVE-CHECKLIST.md` (GoPay merchant account,
 Twilio sender, DNS, legal review, test matrix), `docs/CZ-PAYMENTS-SETUP.md`,
-`deploy/create-admin.js`, `deploy/backup.sh`, `deploy/Caddyfile`,
-`deploy/restaurace.service` and `tools/` were all cloud-only OneDrive stubs
-that could not be read when this repo was assembled, so they were deliberately
-left out rather than published unread. They are still in the original
-`Landing-app-1-main` folder — make them available offline in Explorer ("Always
-keep on this device"), check them for real credentials, and only then add them
-here.
+`deploy/backup.sh`, `deploy/Caddyfile`, `deploy/restaurace.service` and
+`tools/` were all cloud-only OneDrive stubs that could not be read when this
+repo was assembled, so they were deliberately left out rather than published
+unread. They are still in the original `Landing-app-1-main` folder — make
+them available offline in Explorer ("Always keep on this device"), check
+them for real credentials, and only then add them here.
+(`deploy/create-admin.js` itself is no longer on that list — see "The first
+admin account" above.)
 
 ## EET 2.0 — elektronická evidence tržeb
 
