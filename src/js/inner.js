@@ -1092,7 +1092,23 @@ function switchView(view) {
     document.getElementById('layoutView').style.display = view === 'layout' ? 'block' : 'none';
 
     if (view === 'overview') renderOverview();
-    else if (view === 'detail' && selectedTableName) renderDetail(selectedTableName);
+    else if (view === 'detail' && selectedTableName) {
+        // Render from the snapshot immediately so the view is never blank, then
+        // re-read that one table and render again. H3's data loss is fixed
+        // server-side, but this page could still SHOW an hour as free that a
+        // customer booked twenty minutes ago — and the admin is about to act on
+        // this exact list. One indexed row, on a view the owner opens by hand.
+        renderDetail(selectedTableName);
+        const openedTable = selectedTableName;
+        refreshTable(openedTable).then(ok => {
+            // Guard against the owner having navigated on while this was in
+            // flight, which would otherwise redraw a view they have left.
+            if (ok && currentView === 'detail' && selectedTableName === openedTable) {
+                renderDetail(openedTable);
+                renderSidebar();
+            }
+        });
+    }
     else if (view === 'waiter') renderWaiterView();
     else if (view === 'menu') renderMenuView();
     else if (view === 'sales') renderSalesView();
@@ -2009,12 +2025,20 @@ function renderAttrTagList(name) {
 // MUTATIONS (PUT to API)
 // ════════════════════════════════════════════════════════════════════════
 
+// Saves a table's OWN properties. Deliberately cannot save bookings.
+//
+// H3: this used to include `data` — the whole reservation grid — read from
+// `tables[name]`, which is a snapshot taken when the page loaded and never
+// refreshed. Every save through here (a description edit, an attribute, a drag
+// in the layout editor) therefore replayed that snapshot over the live record
+// and deleted every reservation booked since the page opened. The server now
+// ignores the field, and this no longer sends it: renaming or deleting a single
+// booking goes through renameBookingOnServer/deleteBookingOnServer below.
 async function persistTimetable(name, overrides = {}) {
     const t = tables[name];
     if (!t) return false;
     const payload = {
         fileId: t.fileId,
-        data: overrides.data !== undefined ? overrides.data : t.data,
         info: overrides.info !== undefined ? overrides.info : (t.info || ''),
         attributes: overrides.attributes !== undefined ? overrides.attributes : (t.attributes || []),
         calendar: t.calendar,
@@ -2135,47 +2159,93 @@ async function removeAttribute(name, attr) {
     if (ok) renderAttrTagList(name);
 }
 
+// ── SINGLE-BOOKING EDITS (H3) ───────────────────────────────────────────
+// Both of these used to deep-copy the whole grid, change one hour in the copy,
+// and PUT the lot back — which is what let a stale snapshot delete other
+// people's reservations. They now name the one slot they mean and let the
+// server keep everything else about it (phone, cancelToken, preorder, receipt).
+//
+// The address is (weekStartStr, dayIdx, hourKey), exactly the three values the
+// booking objects built by collectBookings() already carry.
+
+function bookingAddress(booking) {
+    return { dateStr: booking.weekStartStr, dayIndex: booking.dayIdx, hour: booking.hourKey };
+}
+
+// Re-fetches ONE table from the server and replaces the local snapshot.
+// After a booking write the stored record is the truth — and the local copy is
+// missing not just this edit but anything customers booked while the page sat
+// open. Re-reading is how the list the admin is looking at stops rotting.
+async function refreshTable(name) {
+    try {
+        const res = await apiFetch(`${API_URL}/timetables/${encodeURIComponent(name)}`);
+        if (!res.ok) return false;
+        tables[name] = await res.json();
+        return true;
+    } catch (e) {
+        console.error('Failed to refresh', name, e);
+        return false;
+    }
+}
+
 async function updateBookingContent(name, booking, newContent) {
-    const t = tables[name];
-    const data = JSON.parse(JSON.stringify(t.data || {}));
-    const dayData = data[booking.weekStartStr];
-    if (!dayData) return;
-
-    const hourSlot = Array.isArray(dayData) ? dayData[booking.dayIdx] : dayData[booking.dayIdx];
-    if (!hourSlot) return;
-
-    if (newContent.trim() === '') {
-        delete hourSlot[booking.hourKey];
-    } else {
-        hourSlot[booking.hourKey] = { ...hourSlot[booking.hourKey], content: newContent.trim() };
+    const content = newContent.trim();
+    // An empty name used to mean "delete" through the whole-grid path. Route it
+    // to the delete endpoint explicitly rather than encoding an action in a
+    // blank string — the server refuses a blank rename outright.
+    if (content === '') {
+        await removeBookingSlot(name, booking, 'Rezervace smazána');
+        return;
     }
 
-    const ok = await persistTimetable(name, { data });
-    if (ok) {
+    try {
+        const res = await apiFetch(`${API_URL}/timetables/${encodeURIComponent(name)}/bookings/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...bookingAddress(booking), content })
+        });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            showToast(body.error || 'Úprava se nezdařila.', true);
+            return;
+        }
+        await refreshTable(name);
         showToast('Rezervace upravena');
         renderDetail(name);
         renderSidebar();
+    } catch (e) {
+        showToast('Úprava se nezdařila.', true);
+    }
+}
+
+// The write half of both delete paths, so the confirm prompt and the request
+// cannot drift apart.
+async function removeBookingSlot(name, booking, successMessage) {
+    try {
+        const res = await apiFetch(`${API_URL}/timetables/${encodeURIComponent(name)}/bookings`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bookingAddress(booking))
+        });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            showToast(body.error || 'Smazání se nezdařilo.', true);
+            return false;
+        }
+        await refreshTable(name);
+        showToast(successMessage);
+        renderDetail(name);
+        renderSidebar();
+        return true;
+    } catch (e) {
+        showToast('Smazání se nezdařilo.', true);
+        return false;
     }
 }
 
 async function deleteBooking(name, booking) {
     if (!confirm(`Smazat rezervaci „${booking.content}“ (${formatDateShort(booking.dateStr)}, ${booking.timeLabel})?`)) return;
-
-    const t = tables[name];
-    const data = JSON.parse(JSON.stringify(t.data || {}));
-    const dayData = data[booking.weekStartStr];
-    if (!dayData) return;
-    const hourSlot = Array.isArray(dayData) ? dayData[booking.dayIdx] : dayData[booking.dayIdx];
-    if (!hourSlot) return;
-
-    delete hourSlot[booking.hourKey];
-
-    const ok = await persistTimetable(name, { data });
-    if (ok) {
-        showToast('Rezervace smazána');
-        renderDetail(name);
-        renderSidebar();
-    }
+    await removeBookingSlot(name, booking, 'Rezervace smazána');
 }
 
 async function deleteTable(name) {

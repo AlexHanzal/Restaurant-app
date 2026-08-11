@@ -529,6 +529,14 @@ const createTimetableSchema = z.object({
 // every other optional field on this schema).
 const timetablePutSchema = z.object({
     fileId: z.string().max(100).optional(),
+    // ACCEPTED AND THEN IGNORED — see the route. This field used to be applied,
+    // which is what made an admin's page-load snapshot able to delete every
+    // reservation booked since (H3). It stays in the schema ONLY so a browser
+    // tab still running a pre-fix inner.js gets a 200 for its description edit
+    // instead of a 400 it has no way to interpret; the stale grid it sends is
+    // discarded rather than written. Bookings are mutated exclusively by the
+    // routes that own them: the booking flow, the cancel route, and
+    // POST/DELETE .../bookings.
     data: z.record(z.any()).optional(),
     info: optStr(5000, "Info"),
     attributes: z.array(z.any()).max(500, "Příliš mnoho atributů").optional(),
@@ -549,6 +557,39 @@ const timetablePutSchema = z.object({
 const deleteTimetableByNameSchema = z.object({
     name: optStr(150, "Název"),
 }).strict();
+
+// ── SINGLE-BOOKING SCHEMAS (H3) ──────────────────────────────────────────
+// The admin's two legitimate edits to the reservation grid — rename the guest
+// on one slot, delete one slot — used to be expressed as "here is the whole
+// grid, save it". These address ONE slot instead, which is the entire point:
+// a request that can only name one hour cannot take three other reservations
+// with it.
+//
+// `dateStr` is validated for SHAPE only, deliberately, and not with the
+// real-calendar-date check the booking flow uses. This is an address into an
+// existing object, not a new booking: data written before that check existed
+// may hold a key like "2026-02-29", and the admin has to be able to delete it.
+// A stricter rule here would make exactly the junk rows nobody wants
+// undeletable.
+const bookingAddressFields = {
+    dateStr: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Neplatné datum"),
+    dayIndex: boundedInt(0, 6, "Den v týdnu"),
+    // The reservation grid runs 1-12 (8:00-20:00), but permanent rows and
+    // pre-existing data have been written with other keys over time, so this is
+    // bounded to a plausible clock rather than to today's UI.
+    hour: boundedInt(0, 23, "Hodina"),
+};
+
+const renameBookingSchema = z.object({
+    ...bookingAddressFields,
+    // Same bound as the guest name the booking flow accepts. Blank is refused
+    // here rather than being treated as "delete", which is what the old
+    // whole-grid path did — an empty string is an ambiguous way to ask for a
+    // deletion, and DELETE .../bookings says it plainly.
+    content: reqStr(150, "Jméno"),
+}).strict();
+
+const deleteBookingSchema = z.object({ ...bookingAddressFields }).strict();
 
 // POST /timetables/:name/rename — { newName }. Renaming used to be done
 // client-side as create-under-new-name + copy + (never actually) delete-old,
@@ -1040,6 +1081,8 @@ module.exports = {
     timetablePutSchema,
     deleteTimetableByNameSchema,
     renameTimetableSchema,
+    renameBookingSchema,
+    deleteBookingSchema,
     menuPutSchema,
     combosPutSchema,
     dailyMenuPutSchema,

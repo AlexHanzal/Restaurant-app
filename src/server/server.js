@@ -3139,14 +3139,54 @@ function setupAPIRoutes() {
         }
     });
 
+    // PUT — a table's OWN properties: description, attributes, seat count,
+    // floorplan placement, calendar blob. NOT its bookings.
+    //
+    // H3 (review 2026-08-08, still open on 2026-08-10 — fixed here). This route
+    // used to apply `req.body.data`, the entire week × day × hour reservation
+    // grid, and the admin frontend always sent it, taken from a snapshot loaded
+    // when the page opened. So: owner opens /admin at 18:00. Three customers
+    // book through the public site between 18:00 and 19:00 — the server writes
+    // them into this record. At 19:00 the owner edits the table's description,
+    // or drags it in the layout editor. The 18:00 snapshot is PUT back and all
+    // three reservations are gone, with no error, no log line, and no way to
+    // recover them short of the SQLite backup. The customers still hold their
+    // confirmation SMS. No attacker involved — just a tab left open for an hour.
+    //
+    // Once guest self-cancellation shipped it also silently destroyed the
+    // `cancelToken` of every booking in that snapshot, so links already sent out
+    // by SMS stopped working.
+    //
+    // THE FIX IS TO REMOVE THE CAPABILITY, not to guard it. A version/rev check
+    // would have made the conflict visible, but the admin has no legitimate
+    // reason to rewrite the reservation grid wholesale in the first place — so
+    // `data` is now ignored here, and the two edits the admin actually makes
+    // (rename a guest, delete a booking) have their own single-slot routes
+    // below. There is no longer any route through which a whole-grid replace
+    // can happen, which retires the class rather than this one instance of it.
     app.put(`${api}/timetables/:name`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsName), V.validate(V.timetablePutSchema), (req, res) => {
         try {
             const found = db.list(COL.timetables).find(d => d.className === req.params.name);
             if (!found) return res.status(404).json({ error: "Not found" });
 
+            // Dropped before the spread, so no ordering accident can reinstate
+            // it. A pre-fix browser tab still sends this; that is not an error
+            // worth failing its description edit over, but it is worth one log
+            // line naming what was discarded.
+            const { data: discardedGrid, ...meta } = req.body;
+            if (discardedGrid !== undefined) {
+                console.warn(
+                    `⚠️  PUT /timetables/${found.className}: ignoring a client-sent booking grid ` +
+                    `(${Object.keys(discardedGrid).length} date key(s)) — bookings are not writable through this route. ` +
+                    `This is a browser running a pre-H3-fix inner.js; a reload will stop it.`
+                );
+            }
+
             const updated = {
                 ...found,
-                ...req.body,
+                ...meta,
+                // Bookings come from the stored record, never from the request.
+                data: found.data,
                 className: found.className, // never let body overwrite the name via this route
                 // SECURITY/CORRECTNESS: never let the body overwrite fileId
                 // either. This record's fileId IS the SQLite row key
@@ -3172,6 +3212,92 @@ function setupAPIRoutes() {
             res.json({ success: true });
         } catch {
             res.status(500).json({ error: "Server error" });
+        }
+    });
+
+    // ── SINGLE BOOKING (H3) ──────────────────────────────────────────────
+    //
+    // The two edits the admin actually makes to the reservation grid. Both
+    // address ONE hour of ONE day, so neither can touch a booking it was not
+    // asked about — which is the property the whole-document PUT above could not
+    // have at any price.
+    //
+    // requireAdmin on both, matching what PUT /timetables/:name has always
+    // required: these replace a capability that route already had, so this is
+    // not the place to change who may use it.
+
+    // Resolves {dateStr, dayIndex, hour} against a stored record, or explains
+    // which part of the address missed. Shared so the two routes cannot drift
+    // in how they read the grid — the array-or-object duality below is the same
+    // one sanitizeTimetableForPublic and reservation-retention.js handle.
+    function resolveBookingSlot(record, { dateStr, dayIndex, hour }) {
+        const dayContainer = record.data && record.data[dateStr];
+        if (!dayContainer || typeof dayContainer !== "object") return null;
+        const hours = dayContainer[dayIndex];
+        if (!hours || typeof hours !== "object") return null;
+        const slot = hours[hour];
+        if (!slot || typeof slot !== "object") return null;
+        return { hours, slot };
+    }
+
+    // POST — rename the guest on one booking.
+    app.post(`${api}/timetables/:name/bookings/rename`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsName), V.validate(V.renameBookingSchema), (req, res) => {
+        try {
+            const found = db.list(COL.timetables).find(d => d.className === req.params.name);
+            if (!found) return res.status(404).json({ error: "Stůl nenalezen" });
+
+            const resolved = resolveBookingSlot(found, req.body);
+            if (!resolved) return res.status(404).json({ error: "Rezervace nenalezena" });
+
+            const content = req.body.content.trim();
+            // Abbreviation is recomputed rather than carried over: it is derived
+            // from the name everywhere else (applyBookingToTimetable), and the
+            // admin overview draws it — a stale one would show the old guest's
+            // initials against the new guest's name. Same derivation, kept in
+            // step by using the same expression.
+            const abbreviation = content.split(/\s+/).map(w => w[0]).join("").slice(0, 3).toUpperCase();
+
+            // Spread-then-override: everything else on the slot survives, which
+            // is the point. phone (the reminder scanner reads it), cancelToken
+            // (already sent to the guest by SMS), guests, order, orderTotal,
+            // isPaid, receiptId, kitchenStatus — none of them are this route's
+            // business and none of them are in the request.
+            resolved.hours[req.body.hour] = { ...resolved.slot, content, abbreviation };
+            db.set(COL.timetables, found.fileId, found);
+
+            // The kitchen board shows the guest name on a ticket for a booking
+            // that carries food, so a rename has to reach it.
+            if (Array.isArray(resolved.slot.order) && resolved.slot.order.length > 0) broadcastBoardEvent();
+
+            res.json({ success: true });
+        } catch (e) {
+            console.error("Booking rename failed:", e);
+            res.status(500).json({ error: "Úprava rezervace se nezdařila" });
+        }
+    });
+
+    // DELETE — remove one booking. Body-carrying DELETE, same shape as
+    // DELETE /timetables above.
+    app.delete(`${api}/timetables/:name/bookings`, csrf.requireCsrf, requireAdmin, V.validateParams(V.paramsName), V.validate(V.deleteBookingSchema), (req, res) => {
+        try {
+            const found = db.list(COL.timetables).find(d => d.className === req.params.name);
+            if (!found) return res.status(404).json({ error: "Stůl nenalezen" });
+
+            const resolved = resolveBookingSlot(found, req.body);
+            if (!resolved) return res.status(404).json({ error: "Rezervace nenalezena" });
+
+            const hadOrder = Array.isArray(resolved.slot.order) && resolved.slot.order.length > 0;
+            delete resolved.hours[req.body.hour];
+            db.set(COL.timetables, found.fileId, found);
+
+            // Mirrors the guest cancel route: a ticket for a booking that no
+            // longer exists would otherwise stay on the board and get cooked.
+            if (hadOrder) broadcastBoardEvent();
+
+            res.json({ success: true });
+        } catch (e) {
+            console.error("Booking delete failed:", e);
+            res.status(500).json({ error: "Smazání rezervace se nezdařilo" });
         }
     });
 
