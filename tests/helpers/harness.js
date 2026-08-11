@@ -68,6 +68,11 @@ const COL = {
     orders: "orders",
     // Delivery routing/batching (spec 2026-08-08) — see server.js's COL.deliveryBatches.
     deliveryBatches: "delivery_batches",
+    // Finding M3 (2026-08-11) — pending SMS-verification codes, one row per
+    // phone currently mid-flow. See server.js's COL.reservationPendingCodes/
+    // COL.reorderPendingCodes and src/server/verification-codes.js.
+    reservationPendingCodes: "reservation_pending_codes",
+    reorderPendingCodes: "reorder_pending_codes",
 };
 const MENU_SINGLETON_ID = "singleton";
 const SETTINGS_ID = "restaurant";

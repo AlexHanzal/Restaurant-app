@@ -79,6 +79,19 @@ const SERVER_CONFIG = {
         // sale. See docs/superpowers/specs/2026-08-02-offline-first-pos-
         // design.md §4.1 and idempotency.js.
         idempotency: "idempotency",
+        // Finding M3 (2026-08-11): in-flight SMS verification codes, one row
+        // per phone number currently mid-flow. Used to be a bare in-memory
+        // Map (pendingVerifications) — lost on every restart, which meant a
+        // deploy or crash silently failed every booking whose customer had
+        // received a code in the previous five minutes. See
+        // verification-codes.js for the TTL/attempts/cooldown rules and its
+        // header for why the stored code is plaintext, not hashed.
+        reservationPendingCodes: "reservation_pending_codes",
+        // Same fix, same reasoning, for the delivery reorder flow's own
+        // pending-code map (reorder.js's pendingCodes) — kept in a SEPARATE
+        // collection, mirroring how the two flows already used separate Maps
+        // for unrelated actions that happen to share SMS-code mechanics.
+        reorderPendingCodes: "reorder_pending_codes",
     },
     serveFrontend: true,
     frontendPath: "src",
@@ -198,6 +211,7 @@ const settingsStore = require("./settings"); // restaurant settings singleton (h
 const timetable = require("./timetable"); // pure date/slot-occupancy rules shared with the customer-facing availability logic — see timetable.js
 const reservationCancel = require("./reservation-cancel"); // guest self-cancellation: token + refusal policy — see reservation-cancel.js
 const reservationRetention = require("./reservation-retention"); // deletes past unpaid bookings — implements the published privacy policy, see its header
+const verificationCodes = require("./verification-codes"); // finding M3: TTL/attempts/cooldown rules for SMS-verification pending codes, shared by the reservation and reorder flows — see its header
 const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
 const routing = require("./routing"); // pure batching/ranking algorithm — see its header
@@ -374,7 +388,12 @@ function smsIsConfigured() {
     return notify.isSmsConfigured();
 }
 
-const pendingVerifications = new Map();
+// Finding M3: this used to be `const pendingVerifications = new Map();` — see
+// COL.reservationPendingCodes above and verification-codes.js for why it is
+// now a SQLite collection instead. There is deliberately no module-level
+// variable to hold it: every route below reads/writes db.js directly with
+// COL.reservationPendingCodes, the same way every other collection in this
+// file is touched, so there is nothing here that a restart can lose.
 
 function normalizePhone(raw) {
     return (raw || "").trim().replace(/[\s\-().]/g, "");
@@ -3584,11 +3603,19 @@ function setupAPIRoutes() {
             pricedOrderTotal = priced.total;
         }
 
-        const existing = pendingVerifications.get(cleanPhone);
-        const cooldown = SERVER_CONFIG.sms.resendCooldownMs;
-        if (existing && Date.now() - existing.lastSentAt < cooldown) {
-            const waitSec = Math.ceil((cooldown - (Date.now() - existing.lastSentAt)) / 1000);
-            return res.status(429).json({ error: `Zkuste to znovu za ${waitSec} s` });
+        // Finding M3: was pendingVerifications.get(cleanPhone) against the
+        // in-memory Map — now COL.reservationPendingCodes, read straight
+        // through db.js like every other collection. checkResendCooldown is
+        // the exact same "now - lastSentAt < cooldown" rule this route used
+        // to inline, extracted to verification-codes.js so it is unit-tested
+        // without a server (TTL boundary, cooldown boundary, attempts).
+        const existing = db.get(COL.reservationPendingCodes, cleanPhone);
+        const cooldownCheck = verificationCodes.checkResendCooldown(existing, {
+            now: Date.now(),
+            cooldownMs: SERVER_CONFIG.sms.resendCooldownMs,
+        });
+        if (!cooldownCheck.ok) {
+            return res.status(429).json({ error: `Zkuste to znovu za ${cooldownCheck.waitSec} s` });
         }
 
         // SECURITY (audit 2026-07-29, finding F5): last line of defence on SMS
@@ -3608,11 +3635,20 @@ function setupAPIRoutes() {
         try {
             const result = await sendVerificationSms(cleanPhone, code);
 
-            pendingVerifications.set(cleanPhone, {
-                code,
-                expiresAt: Date.now() + SERVER_CONFIG.sms.codeTtlMs,
-                attemptsLeft: SERVER_CONFIG.sms.maxAttempts,
-                lastSentAt: Date.now(),
+            // Finding M3: was pendingVerifications.set(cleanPhone, {...}) on
+            // the in-memory Map — now a write through db.js, so a restart
+            // between this response and the customer typing the code back
+            // in no longer loses the booking. buildEntry() supplies the
+            // code/expiresAt/attemptsLeft/lastSentAt shape (same TTL/attempt
+            // numbers as before, from SERVER_CONFIG.sms); `payload` is
+            // merged on top exactly as it was appended to the Map entry.
+            db.set(COL.reservationPendingCodes, cleanPhone, {
+                ...verificationCodes.buildEntry(code, {
+                    id: cleanPhone,
+                    now: Date.now(),
+                    ttlMs: SERVER_CONFIG.sms.codeTtlMs,
+                    maxAttempts: SERVER_CONFIG.sms.maxAttempts,
+                }),
                 // `phone` (already SMS-verified by definition of this flow)
                 // rides along in the payload so it lands on the timetable
                 // slot itself at booking time (applyBookingToTimetable) —
@@ -3646,25 +3682,40 @@ function setupAPIRoutes() {
         const cleanPhone = normalizePhone(phone);
         if (!cleanPhone) return res.status(400).json({ error: "Chybí telefon nebo kód" });
 
-        const pending = pendingVerifications.get(cleanPhone);
-        if (!pending) return res.status(400).json({ error: "Nejprve si vyžádejte ověřovací kód" });
+        // Finding M3: was pendingVerifications.get(cleanPhone) against the
+        // in-memory Map. evaluateCode() is the exact same missing -> expired
+        // -> exhausted -> wrong -> ok precedence this route used to run
+        // inline, extracted to verification-codes.js — see that module for
+        // why the boundary is `now > expiresAt` (not >=) and why a wrong
+        // guess never mutates anything itself (this route does the write).
+        const pending = db.get(COL.reservationPendingCodes, cleanPhone);
+        const verdict = verificationCodes.evaluateCode(pending, code, Date.now());
 
-        if (Date.now() > pending.expiresAt) {
-            pendingVerifications.delete(cleanPhone);
+        if (verdict.outcome === "missing") {
+            return res.status(400).json({ error: "Nejprve si vyžádejte ověřovací kód" });
+        }
+
+        if (verdict.outcome === "expired") {
+            db.remove(COL.reservationPendingCodes, cleanPhone);
             return res.status(400).json({ error: "Kód vypršel, vyžádejte si nový" });
         }
 
-        if (pending.attemptsLeft <= 0) {
-            pendingVerifications.delete(cleanPhone);
+        if (verdict.outcome === "exhausted") {
+            db.remove(COL.reservationPendingCodes, cleanPhone);
             return res.status(400).json({ error: "Příliš mnoho pokusů, vyžádejte si nový kód" });
         }
 
-        if (String(code).trim() !== pending.code) {
-            pending.attemptsLeft -= 1;
-            return res.status(400).json({ error: "Nesprávný kód", attemptsLeft: pending.attemptsLeft });
+        if (verdict.outcome === "wrong") {
+            db.patch(COL.reservationPendingCodes, cleanPhone, { attemptsLeft: verdict.attemptsLeft });
+            return res.status(400).json({ error: "Nesprávný kód", attemptsLeft: verdict.attemptsLeft });
         }
 
-        pendingVerifications.delete(cleanPhone);
+        // outcome === "ok" — one-time use, same as the Map's .delete() on
+        // success. Also the point where the M3 fix's privacy-retention
+        // promise (verification-codes.js's header) is kept: the row is gone
+        // the instant it stops being useful, never left for the prune sweep
+        // to find.
+        db.remove(COL.reservationPendingCodes, cleanPhone);
 
         // GO-LIVE (settings.js): re-check the slot is still open at the
         // moment of booking, not just at send-code time — settings (pause/
@@ -3870,7 +3921,11 @@ function setupAPIRoutes() {
             // it has actually gone out, so a transport failure never leaves a
             // phantom pending code a customer was never told about.
             const result = await sendReorderCodeSms(cleanPhone, code);
-            reorder.putPendingCode(cleanPhone, code);
+            // Finding M3: putPendingCode used to write into reorder.js's own
+            // in-memory Map. db/COL.reorderPendingCodes are passed in (DI,
+            // not a require inside reorder.js) so that module keeps its
+            // stated "no DB access" design — see its header.
+            reorder.putPendingCode(db, COL.reorderPendingCodes, cleanPhone, code);
 
             // SECURITY (spec §7 — the whole point of this route): respond
             // IDENTICALLY whether or not this phone number has ever placed an
@@ -3903,7 +3958,7 @@ function setupAPIRoutes() {
         // (no pending code / expired / too many attempts / wrong code + how
         // many attempts remain) — see reorder.js for the Czech reason strings,
         // which are the same ones verify-and-book uses above.
-        const result = reorder.checkPendingCode(cleanPhone, code);
+        const result = reorder.checkPendingCode(db, COL.reorderPendingCodes, cleanPhone, code);
         if (!result.ok) {
             return res.status(400).json({ error: result.reason, attemptsLeft: result.attemptsLeft });
         }
@@ -6214,12 +6269,30 @@ async function start() {
     setupAPIRoutes();
     setupErrorHandlers(); // must run after every other app.use/route registration — see comment above setupErrorHandlers()
 
-    setInterval(() => {
-        const now = Date.now();
-        for (const [phone, entry] of pendingVerifications) {
-            if (now > entry.expiresAt) pendingVerifications.delete(phone);
-        }
-    }, 60 * 1000);
+    // Finding M3: pending SMS-verification codes for both public flows now
+    // live in SQLite (COL.reservationPendingCodes / COL.reorderPendingCodes),
+    // not an in-memory Map — see verification-codes.js's header for the full
+    // reasoning, including why the code is stored in plaintext rather than
+    // hashed. Pruned at the SAME 60s cadence the old in-memory sweep used
+    // (short, because these rows are meant to live at most 5 minutes — see
+    // src/html/ochrana-osobnich-udaju.html §5's "not retained after
+    // verification or expiry" promise), PLUS once here at boot — the old
+    // sweep never needed a boot-time run, because a fresh process started
+    // with an empty Map; a fresh process now inherits whatever the PREVIOUS
+    // process left on disk, including rows that finished expiring while
+    // nothing was running to sweep them, so this is what keeps that
+    // privacy-policy promise true across a restart, not just within an
+    // uptime window. unref()'d, unlike the old sweep — see pruneIdempotency's
+    // own comment just below for why: housekeeping must never be the reason
+    // the process stays alive.
+    const pruneVerificationCodes = () => {
+        const reservationRemoved = verificationCodes.pruneExpired(db, COL.reservationPendingCodes);
+        const reorderRemoved = verificationCodes.pruneExpired(db, COL.reorderPendingCodes);
+        const removed = reservationRemoved + reorderRemoved;
+        if (removed) console.log(`🧹 Pruned ${removed} expired verification code(s)`);
+    };
+    pruneVerificationCodes();
+    setInterval(pruneVerificationCodes, 60 * 1000).unref();
 
     // Offline POS idempotency keys (spec 2026-08-02 §4.1). Swept hourly and
     // kept for 30 days — far longer than any drain could still be retrying,
@@ -6334,10 +6407,10 @@ async function start() {
 
     // go-live Task 4 (spec §6): reservation reminder scanner — ticks every 5
     // minutes, sends a reminder SMS ~2h before a booked slot's start time.
-    // unref() so this interval alone never keeps the process alive (matches
-    // the pendingVerifications cleanup interval above, which doesn't unref()
-    // only because nothing else here relies on that — this one explicitly
-    // should not block a graceful shutdown). Guarded entirely inside
+    // unref() so this interval alone never keeps the process alive (same
+    // reasoning as pruneVerificationCodes/pruneIdempotency/pruneRetention
+    // above — housekeeping must never be the reason the process stays
+    // alive, or block a graceful shutdown). Guarded entirely inside
     // reminderScannerTick() by the smsReservationReminder toggle (default
     // off) and its own try/catch, so a bad tick never crashes the process
     // or stops future ticks.

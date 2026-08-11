@@ -5,20 +5,31 @@
 // security / §6 architecture) and docs/superpowers/plans/2026-07-25-reorder.md
 // (Task A) for the full rationale. Self-contained like settings.js/csrf.js/
 // validation.js — no DB access, no server.js coupling, easy to unit-test in
-// isolation. The one dependency is auth.js, for deriveSecret() (see the
-// security note on the token functions below); server.js (owned by a
-// different agent while this module was written) is never required here.
+// isolation. The dependencies are auth.js, for deriveSecret() (see the
+// security note on the token functions below), and verification-codes.js,
+// the pure TTL/attempts/cooldown module shared with the reservation flow
+// (see finding M3 below) — both are, like this file, dependency-free of
+// db.js and server.js. server.js (owned by a different agent while this
+// module was written) is never required here.
 //
 // Design:
 //   - Reorder tokens are signed with a key DERIVED from JWT_SECRET, never
 //     JWT_SECRET itself — see signReorderToken/verifyReorderToken below and
 //     auth.js's deriveSecret() comment for the full §5 threat model. This is
 //     the single most important thing in this file.
-//   - Pending SMS codes live in a module-level Map, mirroring the
-//     `pendingVerifications` pattern server.js already uses for the
-//     reservation flow — but a SEPARATE map, since reorder verification and
-//     reservation verification are unrelated actions that happen to share
-//     the same SMS-code mechanics.
+//   - Pending SMS codes used to live in a module-level Map, mirroring the
+//     `pendingVerifications` pattern server.js used for the reservation flow
+//     — but a SEPARATE map, since reorder verification and reservation
+//     verification are unrelated actions that happen to share the same
+//     SMS-code mechanics. Finding M3 (2026-08-11 audit) moved BOTH into
+//     SQLite: a restart dropped every pending code, so a customer mid-flow
+//     had to start over and burn more of the shared SMS budget doing it. See
+//     putPendingCode/checkPendingCode below — `db` and `col` are passed in
+//     by the caller (server.js) rather than required here, the same
+//     dependency-injection pattern idempotency.js and reservation-
+//     retention.js already use for their own prune(db, collection)
+//     functions, so this file still never top-level `require`s db.js and
+//     stays testable with a plain in-memory stub.
 //   - previewOrder() takes its pricing function as an ARGUMENT rather than
 //     importing priceOrderItems from server.js. That's what keeps this
 //     module free of DB/server coupling (spec §6) and lets Task D's unit
@@ -27,6 +38,7 @@
 
 const jwt = require("jsonwebtoken");
 const auth = require("./auth");
+const verificationCodes = require("./verification-codes");
 
 // ── TOKEN (cookie credential) ────────────────────────────────────────────
 
@@ -88,76 +100,77 @@ function reorderCookieOptions() {
 }
 
 // ── PENDING SMS CODES ────────────────────────────────────────────────────
-// Module-level Map keyed by normalised phone, entries { code, expiresAt,
-// attemptsLeft }. TTL/attempt-count numbers below are the SAME numbers as
-// SERVER_CONFIG.sms in server.js (codeTtlMs: 5 min, maxAttempts: 5) —
-// duplicated here as literals rather than imported, so this module stays
-// dependency-free of server.js (same "coordinate rather than import"
-// convention validation.js already uses for its own duplicated constants,
-// e.g. the VAT-rate unions). If SERVER_CONFIG.sms ever changes these
-// numbers, update the literals below to match.
-const PENDING_CODE_TTL_MS = 5 * 60 * 1000; // SERVER_CONFIG.sms.codeTtlMs
-const PENDING_CODE_MAX_ATTEMPTS = 5;       // SERVER_CONFIG.sms.maxAttempts
-
-const pendingCodes = new Map();
-
-// Sweeps expired entries. Called on every write (putPendingCode) rather
-// than via a separate setInterval/timer — this module owns no timers of
-// its own, and a sweep-on-write is enough to guarantee the map can never
-// grow past "one entry per phone number that has sent a code in the last
-// 5 minutes plus however long ago its last write was", which bounds it
-// just fine for this traffic pattern.
-function sweepExpiredCodes() {
-    const now = Date.now();
-    for (const [phone, entry] of pendingCodes) {
-        if (now > entry.expiresAt) pendingCodes.delete(phone);
-    }
-}
+// Finding M3 (2026-08-11 audit): this used to be a module-level Map keyed by
+// normalised phone, entries { code, expiresAt, attemptsLeft } — lost on
+// every restart, same failure as the reservation flow's pendingVerifications
+// (see server.js). Now persisted through db.js, but `db` and `col` are
+// parameters, not a top-level `require("./db")`: putPendingCode/
+// checkPendingCode below are the DB-touching layer, kept thin (look up,
+// decide via verification-codes.js, write, return), while the actual
+// TTL/attempts decision logic lives in that pure module and is shared with
+// the reservation flow rather than duplicated. This is the same
+// dependency-injection shape reservation-retention.js's prune(db,
+// collection) and idempotency.js's prune(db, col) already use, and it is
+// what keeps this file honest about the "no DB access, no server.js
+// coupling" design principle in the header above — nothing here can be
+// exercised except by a caller that hands in a store.
+//
+// TTL/attempt-count numbers come from verification-codes.js's own defaults
+// (5 min / 5 attempts — the same numbers as SERVER_CONFIG.sms in server.js),
+// not duplicated as local literals anymore: previously this file kept its
+// own copies specifically to avoid importing anything from server.js, and
+// verification-codes.js is exactly the kind of dependency-free sibling
+// module that lets this file use the SAME numbers without importing
+// server.js or drifting out of sync with it by hand.
 
 // Keyed by phoneMatchKey(), not by the raw normalised string: a customer who
 // requests the code as "+420 601 000 001" and then types "601000001" into the
 // verify field is the same person and must not be told "Nejprve si vyžádejte
 // ověřovací kód". Both entry points below key identically, so the pair can
 // never disagree.
-function putPendingCode(normalizedPhone, code) {
-    sweepExpiredCodes();
-    pendingCodes.set(phoneMatchKey(normalizedPhone), {
-        code,
-        expiresAt: Date.now() + PENDING_CODE_TTL_MS,
-        attemptsLeft: PENDING_CODE_MAX_ATTEMPTS,
-    });
+//
+// Sweeps expired entries on every write, in addition to server.js's own
+// interval-driven prune (see verificationCodes.pruneExpired's call sites
+// there) — cheap, and it means a burst of writes to THIS collection cannot
+// grow it past "one row per phone that has sent a code recently" even if the
+// interval sweep were somehow delayed.
+function putPendingCode(db, col, normalizedPhone, code) {
+    verificationCodes.pruneExpired(db, col);
+    const key = phoneMatchKey(normalizedPhone);
+    db.set(col, key, verificationCodes.buildEntry(code, { id: key }));
 }
 
 // Mirrors POST ${api}/reservations/verify-and-book's failure messages AND
 // their order of precedence EXACTLY (server.js) — a customer bouncing
 // between the reservation flow and this one should never see different
-// wording for the same underlying failure. Consumes the entry on success
-// (one-time use, matching verify-and-book's pendingVerifications.delete on
-// success); decrements attemptsLeft on a wrong code and deletes the entry
-// once attempts are exhausted (also matching verify-and-book).
-function checkPendingCode(normalizedPhone, code) {
+// wording for the same underlying failure. Both routes now share the same
+// decision function (verificationCodes.evaluateCode), which is what makes
+// that guarantee structural rather than something to remember to keep in
+// sync by hand. Consumes the entry on success (one-time use); decrements
+// attemptsLeft on a wrong code and deletes the entry once attempts are
+// exhausted (also matching verify-and-book).
+function checkPendingCode(db, col, normalizedPhone, code) {
     const key = phoneMatchKey(normalizedPhone);
-    const pending = pendingCodes.get(key);
-    if (!pending) {
+    const pending = db.get(col, key);
+    const verdict = verificationCodes.evaluateCode(pending, code, Date.now());
+
+    if (verdict.outcome === "missing") {
         return { ok: false, reason: "Nejprve si vyžádejte ověřovací kód" };
     }
-
-    if (Date.now() > pending.expiresAt) {
-        pendingCodes.delete(key);
+    if (verdict.outcome === "expired") {
+        db.remove(col, key);
         return { ok: false, reason: "Kód vypršel, vyžádejte si nový" };
     }
-
-    if (pending.attemptsLeft <= 0) {
-        pendingCodes.delete(key);
+    if (verdict.outcome === "exhausted") {
+        db.remove(col, key);
         return { ok: false, reason: "Příliš mnoho pokusů, vyžádejte si nový kód" };
     }
-
-    if (String(code).trim() !== pending.code) {
-        pending.attemptsLeft -= 1;
-        return { ok: false, reason: "Nesprávný kód", attemptsLeft: pending.attemptsLeft };
+    if (verdict.outcome === "wrong") {
+        db.patch(col, key, { attemptsLeft: verdict.attemptsLeft });
+        return { ok: false, reason: "Nesprávný kód", attemptsLeft: verdict.attemptsLeft };
     }
 
-    pendingCodes.delete(key);
+    db.remove(col, key);
     return { ok: true };
 }
 

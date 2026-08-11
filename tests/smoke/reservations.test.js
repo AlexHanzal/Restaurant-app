@@ -217,6 +217,57 @@ describe("reservation booking flow", () => {
         assert.strictEqual(out.res.status, 409, JSON.stringify(out.body));
     });
 
+    // Finding M3's non-negotiable: the payload verify-and-book books from is
+    // the one priced and stored server-side at send-code time, and NOTHING
+    // else — the whole reason it's held server-side instead of round-
+    // tripped through the client. A hostile body bolted onto the real
+    // verify-and-book call must have zero effect: verifyAndBookSchema has no
+    // `.passthrough()` (so these fields are stripped before the handler ever
+    // sees them) AND the handler only ever reads phone/code off req.body,
+    // booking from pending.payload — two independent layers, either one of
+    // which is enough on its own.
+    test("verify-and-book books only the server-priced payload from send-code — a tampered body is not honoured", async () => {
+        const out = await sendCode(server, { startHour: 11, guestName: "Server Cena" });
+        assert.strictEqual(out.res.status, 200, JSON.stringify(await out.res.json().catch(() => ({}))));
+        await new Promise(r => setTimeout(r, 50));
+        const code = readCode(server, out.phone);
+
+        const res = await post(server, "/reservations/verify-and-book", {
+            phone: out.phone,
+            code,
+            startHour: 12,
+            guestName: "Tampered Guest",
+            tableName: "Nonexistent Table",
+            orderTotal: 0,
+        });
+        assert.strictEqual(res.status, 200, JSON.stringify(await res.json().catch(() => ({}))));
+
+        const record = harness.readRecord(server.dbPath, COL.timetables, TABLE_FILE_ID);
+        assert.strictEqual(
+            record.data[TOMORROW][dayIndexOf(TOMORROW)][11].content,
+            "Server Cena",
+            "the ORIGINAL guest name/hour from send-code must be what gets booked"
+        );
+        assert.ok(!record.data[TOMORROW][dayIndexOf(TOMORROW)][12], "the tampered hour must never be booked");
+    });
+
+    // Finding M3: checkResendCooldown reads `existing.lastSentAt` back out of
+    // COL.reservationPendingCodes — this is the end-to-end proof the 30s
+    // per-phone resend cooldown still works now that the pending row lives
+    // in SQLite instead of a Map. Two real requests, no clock trickery: a
+    // second send-code for the SAME phone, moments after the first, must
+    // still be refused.
+    test("a second send-code for the same phone within 30s is refused with the cooldown message", async () => {
+        const phone = nextPhone();
+        const first = await sendCode(server, { phone, startHour: 9, guestName: "Cooldown Test" });
+        assert.strictEqual(first.res.status, 200, JSON.stringify(await first.res.json().catch(() => ({}))));
+
+        const second = await sendCode(server, { phone, startHour: 9, guestName: "Cooldown Test" });
+        assert.strictEqual(second.res.status, 429);
+        const body = await second.res.json();
+        assert.match(body.error, /Zkuste to znovu za \d+ s/);
+    });
+
     // ── fix 1 ───────────────────────────────────────────────────────────
     test("a dayIndex that contradicts dateStr is refused outright", async () => {
         const real = dayIndexOf(TOMORROW);
@@ -511,5 +562,56 @@ describe("reservation self-cancellation", () => {
     test("the raw template is not reachable under /html", async () => {
         const res = await fetch(`${server.baseUrl}/reservation/html/zrusit.html`);
         assert.strictEqual(res.status, 404);
+    });
+});
+
+// ── FINDING M3: PENDING VERIFICATION SURVIVES A RESTART ──────────────────
+// Before this fix, pendingVerifications was a bare in-memory Map: a code
+// requested moments before a deploy/crash/OOM was silently gone on the next
+// process, and the customer who had just received it hit "Nejprve si
+// vyžádejte ověřovací kód" for no reason they could see. This is the direct
+// regression guard — a PINNED temp DB (not the auto-generated one
+// harness.start() otherwise uses per call), so a second, brand-new server
+// process can be pointed at the exact same file the first one wrote to.
+// Own describe block/server, so a failure here is never entangled with the
+// booking suite above.
+describe("reservation verification survives a restart", () => {
+    const os = require("os");
+    const path = require("path");
+    const crypto = require("crypto");
+    const dbPath = path.join(os.tmpdir(), `reservation-m3-smoke-${process.pid}-${crypto.randomBytes(6).toString("hex")}.db`);
+
+    test("a code requested before a crash still books after the process restarts", async () => {
+        const first = await harness.start({ env: { SQLITE_PATH: dbPath } });
+        let phone;
+        try {
+            seedSettings(dbPath);
+            harness.seedRecord(dbPath, COL.timetables, TABLE_FILE_ID, tableRecord());
+
+            const out = await sendCode(first, { startHour: 5, guestName: "Restartová Zkouška" });
+            assert.strictEqual(out.res.status, 200, JSON.stringify(await out.res.json().catch(() => ({}))));
+            phone = out.phone;
+            await new Promise(r => setTimeout(r, 50));
+            var code = readCode(first, phone); // eslint-disable-line no-var
+        } finally {
+            await first.stop();
+        }
+
+        // A brand new process, same DB file, no send-code call against it —
+        // if verify-and-book succeeds here, the pending code (and the
+        // server-priced payload it carries — table/date/hour/guest name)
+        // can only have come from disk, not from any Map instance, which
+        // died with the first process.
+        const second = await harness.start({ env: { SQLITE_PATH: dbPath } });
+        try {
+            const verify = await post(second, "/reservations/verify-and-book", { phone, code });
+            assert.strictEqual(verify.status, 200, await verify.text());
+
+            const record = harness.readRecord(dbPath, COL.timetables, TABLE_FILE_ID);
+            const slot = record.data[TOMORROW][dayIndexOf(TOMORROW)][5];
+            assert.strictEqual(slot.content, "Restartová Zkouška", "the booking written after the restart must carry the ORIGINAL server-priced payload from before it");
+        } finally {
+            await second.stop();
+        }
     });
 });
