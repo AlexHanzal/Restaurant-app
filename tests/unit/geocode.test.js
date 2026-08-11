@@ -188,3 +188,94 @@ test("an empty address never becomes a request", async () => {
         assert.strictEqual(calls.length, 0);
     } finally { restoreFetch(); }
 });
+
+// ── PRIVACY / RETENTION (finding N1(c)) ─────────────────────────────────
+
+test("a cached row never carries the street address", async () => {
+    // The rows used to store `query` — the normalized address — even though
+    // nothing ever read it back, since the cache is keyed by its hash. That
+    // made this table a permanent register of everywhere the restaurant has
+    // delivered. It must stay unwritten on BOTH the hit and the miss path.
+    clearCache();
+    const restore = stubFetch((url) => (url.includes("nenalezena") ? miss() : hit(50.1, 14.4)));
+    try {
+        await geocode.geocode("Školní 50", "43001");
+        await geocode.geocode("Adresa nenalezena", "43001");
+    } finally { restoreFetch(); void restore; }
+
+    const rows = db.list(geocode.GEOCACHE_COLLECTION);
+    assert.strictEqual(rows.length, 2, "one hit, one miss");
+    for (const row of rows) {
+        assert.ok(!("query" in row), `row must not carry the address: ${JSON.stringify(row)}`);
+        const serialized = JSON.stringify(row);
+        assert.ok(!/skolni|Školní|nenalezena/i.test(serialized), `no address text anywhere in the row: ${serialized}`);
+        assert.ok(row.id, "still keyed by the hash");
+    }
+});
+
+test("expired rows are selected, fresh ones are not", () => {
+    const now = new Date("2026-08-10T12:00:00Z");
+    const at = (daysAgo) => new Date(now.getTime() - daysAgo * 86400000).toISOString();
+
+    const ids = geocode.selectExpiredCacheIds([
+        { id: "fresh", at: at(10) },
+        { id: "old", at: at(200) },
+        { id: "exactly-inside", at: at(179) },
+    ], { now });
+
+    assert.deepStrictEqual(ids, ["old"]);
+});
+
+test("a row with no usable timestamp is deleted, not kept", () => {
+    // The opposite of the login audit's rule, and deliberately so: an audit row
+    // is evidence and losing it is the harm; a cache row is personal data whose
+    // loss costs one HTTP request.
+    const now = new Date();
+    for (const bad of [undefined, null, "", "not-a-date"]) {
+        assert.deepStrictEqual(
+            geocode.selectExpiredCacheIds([{ id: "x", at: bad }], { now }), ["x"],
+            `at=${JSON.stringify(bad)} must expire`
+        );
+    }
+});
+
+test("a legacy row carrying an address is deleted whatever its age", () => {
+    const now = new Date();
+    assert.deepStrictEqual(
+        geocode.selectExpiredCacheIds([{ id: "legacy", at: now.toISOString(), query: "skolni 50 43001" }], { now }),
+        ["legacy"],
+        "rows written before the address was dropped must not survive on freshness"
+    );
+});
+
+test("the retention window is configurable and refuses nonsense", () => {
+    const now = new Date("2026-08-10T12:00:00Z");
+    const row = { id: "r", at: new Date(now.getTime() - 40 * 86400000).toISOString() };
+
+    assert.deepStrictEqual(geocode.selectExpiredCacheIds([row], { now, retentionDays: 30 }), ["r"]);
+    assert.deepStrictEqual(geocode.selectExpiredCacheIds([row], { now, retentionDays: 90 }), []);
+    for (const bad of [0, -5, NaN, "soon"]) {
+        assert.deepStrictEqual(geocode.selectExpiredCacheIds([row], { now, retentionDays: bad }), [],
+            `retentionDays=${JSON.stringify(bad)} must fall back to the 180-day default`);
+    }
+    assert.deepStrictEqual(geocode.selectExpiredCacheIds(null), []);
+});
+
+test("prune actually deletes from the database", async () => {
+    clearCache();
+    const restore = stubFetch(() => hit(50.2, 14.5));
+    try {
+        await geocode.geocode("Dlouhá 1", "11000");
+    } finally { restoreFetch(); void restore; }
+
+    assert.strictEqual(db.list(geocode.GEOCACHE_COLLECTION).length, 1);
+
+    // Nothing to do today...
+    assert.strictEqual(geocode.prune(new Date()), 0);
+    assert.strictEqual(db.list(geocode.GEOCACHE_COLLECTION).length, 1);
+
+    // ...and gone once the clock has moved past the window.
+    const later = new Date(Date.now() + (geocode.CACHE_RETENTION_DAYS + 1) * 86400000);
+    assert.strictEqual(geocode.prune(later), 1);
+    assert.strictEqual(db.list(geocode.GEOCACHE_COLLECTION).length, 0);
+});

@@ -85,12 +85,22 @@
         identifikace objednávky, nikoli údaje o platební kartě samotné.</li>
       <li><strong>Poskytovatel e-mailových služeb (SMTP)</strong> — odeslání potvrzení objednávky a odkazu na
         účtenku na zadanou e-mailovou adresu.</li>
+      <li><strong>OpenStreetMap Foundation</strong> (služba Nominatim, Spojené království) — převod doručovací
+        adresy na zeměpisné souřadnice, aby bylo možné seřadit rozvozy podle vzdálenosti a spojit blízké
+        objednávky do jedné jízdy. Předává se <strong>pouze ulice s číslem a PSČ</strong> — nikdy jméno,
+        telefon, e-mail ani obsah objednávky. Souřadnice se ukládají do mezipaměti, aby se stejná adresa
+        nedotazovala opakovaně. Provozovatel může tuto funkci vypnout; rozvoz pak funguje bez řazení podle
+        vzdálenosti a žádná adresa se nikam nepředává.</li>
       <li><strong>Poskytovatel hostingu / serveru (VPS)</strong> — technické uložení a provoz aplikace a databáze.</li>
     </ul>
     <p>Se všemi uvedenými zpracovateli má Provozovatel uzavřen vztah odpovídající požadavkům čl. 28 GDPR, případně
       jedná podle jejich vlastních standardních smluvních podmínek zpracování dat. Osobní údaje nejsou předávány
-      žádným dalším třetím stranám k marketingovým ani jiným účelům a nejsou předávány mimo Evropskou unii/Evropský
-      hospodářský prostor nad rámec toho, co pro poskytnutí svých služeb vyžadují výše uvedení zpracovatelé.</p>
+      žádným dalším třetím stranám k marketingovým ani jiným účelům.</p>
+    <p>Mimo Evropskou unii/Evropský hospodářský prostor se údaje předávají pouze v rozsahu, který pro poskytnutí
+      svých služeb vyžadují výše uvedení zpracovatelé — konkrétně <strong>Twilio Inc.</strong> (Spojené státy,
+      na základě standardních smluvních klauzulí) a <strong>OpenStreetMap Foundation</strong> (Spojené království,
+      pro které Evropská komise vydala rozhodnutí o odpovídající ochraně údajů). Žádné jiné přenosy do třetích
+      zemí neprobíhají.</p>
   </section>
 
   <section class="legal-section">
@@ -98,9 +108,14 @@
     <ul>
       <li><strong>Objednávky a účtenky/daňové doklady:</strong> uchovávány po dobu vyžadovanou zákonem
         o účetnictví a daňovými předpisy, tj. zpravidla 5–10 let od konce zdaňovacího období, k němuž se vztahují.</li>
-      <li><strong>Rezervace stolu (bez navazující objednávky/účtenky):</strong> uchovávány pouze krátkodobě po
-        proběhlém termínu rezervace — po nezbytnou dobu k řešení případných reklamací a provozních dotazů, poté
-        jsou smazány nebo anonymizovány.</li>
+      <li><strong>Rezervace stolu (bez navazující objednávky/účtenky):</strong> uchovávány <strong>90 dnů</strong>
+        po proběhlém termínu rezervace — po nezbytnou dobu k řešení případných reklamací a provozních dotazů —
+        a poté automaticky mazány. Mazání provádí sama aplikace; nejde o ruční úkon, na který by se dalo
+        zapomenout. Rezervace s navazující zaplacenou objednávkou spadá pod první odrážku, protože je součástí
+        daňového dokladu.</li>
+      <li><strong>Zeměpisné souřadnice doručovacích adres (mezipaměť):</strong> uchovávány nejdéle
+        <strong>180 dnů</strong> od posledního převodu adresy, poté mazány. V mezipaměti není uložena samotná
+        adresa, pouze její nevratný kontrolní součet a souřadnice.</li>
       <li><strong>Ověřovací SMS kódy:</strong> platí 5 minut a po ověření nebo vypršení platnosti nejsou dále
         uchovávány.</li>
     </ul>

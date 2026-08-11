@@ -162,15 +162,94 @@ async function geocode(address, psc, opts = {}) {
 
     if (!found) {
         db.set(GEOCACHE_COLLECTION, key, {
-            id: key, query, lat: null, lon: null, quality: "", provider: "nominatim",
+            id: key, lat: null, lon: null, quality: "", provider: "nominatim",
             at, failCount: (cached && cached.failCount ? cached.failCount : 0) + 1,
         });
         return null;
     }
 
-    const record = { id: key, query, lat: found.lat, lon: found.lon, quality: found.quality, provider: "nominatim", at, failCount: 0 };
+    const record = { id: key, lat: found.lat, lon: found.lon, quality: found.quality, provider: "nominatim", at, failCount: 0 };
     db.set(GEOCACHE_COLLECTION, key, record);
     return { lat: found.lat, lon: found.lon, quality: found.quality, provider: "nominatim", at };
 }
 
-module.exports = { isEnabled, normalizeQuery, cacheKey, geocode, GEOCACHE_COLLECTION };
+// ── RETENTION ────────────────────────────────────────────────────────────
+// Review 2026-08-10, finding N1(c). Two problems, and the first one is the
+// interesting one:
+//
+//  1. THE ROWS USED TO CARRY THE ADDRESS IN PLAINTEXT. Every record stored
+//     `query` — the normalized street address and PSČ — even though nothing
+//     ever read it back: the cache is keyed by its SHA-1, so lookups never
+//     need the original text. It was there for debugging and cost a permanent,
+//     unpruned register of everywhere this restaurant has ever delivered. It
+//     is now simply not written. `failCount` and the hash are enough to debug
+//     a persistently failing address, and the surviving row is a hash plus
+//     coordinates rather than a customer's home address.
+//
+//     Rows written before this change still hold `query`. Rather than a
+//     migration, prune() below deletes any row that has one, on the next
+//     sweep, whatever its age — the cache is a cache, so losing an entry costs
+//     one re-lookup and nothing else.
+//
+//  2. NOTHING EVER DELETED A ROW. An address the restaurant delivered to once,
+//     two years ago, stayed forever.
+//
+// Deliberately age-since-WRITE, not age-since-last-use: implementing LRU would
+// mean writing to the row on every cache hit, which turns a read-mostly table
+// into a write-mostly one for no benefit a restaurant would notice. A street
+// that is still being delivered to simply gets re-geocoded once every
+// GEOCODE_CACHE_DAYS.
+const CACHE_RETENTION_DAYS = Number(process.env.GEOCODE_CACHE_DAYS) > 0
+    ? Number(process.env.GEOCODE_CACHE_DAYS)
+    : 180;
+
+// Pure: takes rows, returns the ids to delete. Exported for its own sake so the
+// rule is testable without a database — same shape as security.js's
+// selectExpiredAuditIds.
+//
+// Fails toward DELETING, which is the opposite of the login audit's rule and
+// correct for the opposite reason: an audit row is evidence and losing it is
+// the harm, whereas a cache row is personal data whose loss costs one HTTP
+// request. So an unparseable/absent timestamp is treated as expired.
+function selectExpiredCacheIds(rows, opts = {}) {
+    if (!Array.isArray(rows)) return [];
+
+    const now = opts.now instanceof Date ? opts.now : new Date();
+    const days = Number(opts.retentionDays);
+    const retentionDays = Number.isFinite(days) && days > 0 ? days : CACHE_RETENTION_DAYS;
+    const cutoff = now.getTime() - retentionDays * 24 * 60 * 60 * 1000;
+
+    const doomed = [];
+    for (const row of rows) {
+        if (!row || !row.id) continue;
+        if ("query" in row) { doomed.push(row.id); continue; } // legacy row carrying an address
+        const t = row.at ? new Date(row.at).getTime() : NaN;
+        if (!Number.isFinite(t) || t < cutoff) doomed.push(row.id);
+    }
+    return doomed;
+}
+
+// Applies the rule. Best-effort by design — a failing prune must never be able
+// to stop the restaurant taking orders, which is why every caller is an
+// unref'd interval and every failure is swallowed with a log.
+function prune(now = new Date()) {
+    try {
+        const expired = selectExpiredCacheIds(db.list(GEOCACHE_COLLECTION), { now });
+        for (const id of expired) db.remove(GEOCACHE_COLLECTION, id);
+        return expired.length;
+    } catch (e) {
+        console.error("Geocode cache prune failed:", e.message);
+        return 0;
+    }
+}
+
+module.exports = {
+    isEnabled,
+    normalizeQuery,
+    cacheKey,
+    geocode,
+    GEOCACHE_COLLECTION,
+    CACHE_RETENTION_DAYS,
+    selectExpiredCacheIds,
+    prune,
+};

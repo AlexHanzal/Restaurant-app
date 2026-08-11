@@ -197,6 +197,7 @@ const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
 const timetable = require("./timetable"); // pure date/slot-occupancy rules shared with the customer-facing availability logic — see timetable.js
 const reservationCancel = require("./reservation-cancel"); // guest self-cancellation: token + refusal policy — see reservation-cancel.js
+const reservationRetention = require("./reservation-retention"); // deletes past unpaid bookings — implements the published privacy policy, see its header
 const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
 const routing = require("./routing"); // pure batching/ranking algorithm — see its header
@@ -6093,6 +6094,34 @@ async function start() {
     };
     pruneIdempotency();
     setInterval(pruneIdempotency, 60 * 60 * 1000).unref();
+
+    // FINDING N1: two collections of personal data that nothing ever deleted.
+    //
+    //   reservations — the privacy policy already promises past bookings without
+    //     a receipt are removed; now something actually does it. Paid bookings
+    //     and standing reservations are never touched (see the module header).
+    //   geocache — held every delivered-to street address in plaintext, forever.
+    //     The address is no longer written at all, and rows expire.
+    //
+    // Daily rather than hourly: neither is time-critical, both walk a whole
+    // collection, and better-sqlite3 is synchronous — so this is work that
+    // should happen rarely and off the hot path. Unref'd, like every other
+    // housekeeping timer in this file.
+    const pruneRetention = () => {
+        try {
+            reservationRetention.prune(db, COL.timetables);
+        } catch (e) {
+            console.error("Reservation retention prune failed:", e);
+        }
+        try {
+            const removed = geocode.prune();
+            if (removed) console.log(`🧹 Geokódovací cache: smazáno ${removed} záznamů`);
+        } catch (e) {
+            console.error("Geocode cache prune failed:", e);
+        }
+    };
+    pruneRetention();
+    setInterval(pruneRetention, 24 * 60 * 60 * 1000).unref();
 
     // FINDING N2: the geocode backlog used to exist only inside geocode.js's
     // in-memory promise chain, recovered only by the on-demand sweep the driver
