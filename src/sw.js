@@ -54,6 +54,14 @@ self.addEventListener("install", event => {
     })());
 });
 
+// Deleting every older `pos-shell-*` cache is also what REMOVES the customer
+// data already sitting on devices from before finding M2 was fixed. SHELL_VERSION
+// is a hash of the shell's own bytes and this file is part of that hash, so
+// editing it changes CACHE_NAME — which means the deploy that ships the
+// allowlist above is the same deploy that drops the old, PII-bearing cache. With
+// skipWaiting() + clients.claim() that happens on the next page load rather than
+// whenever the last tab is finally closed. No separate migration, and nothing
+// for an owner to remember to run.
 self.addEventListener("activate", event => {
     event.waitUntil((async () => {
         const names = await caches.keys();
@@ -70,9 +78,63 @@ function isApiRequest(url) {
     return url.pathname.includes("/api/");
 }
 
+// ── WHAT MAY BE WRITTEN TO DISK (finding M2) ────────────────────────────
+//
+// This worker used to run EVERY same-origin `GET /api/*` through
+// networkFirst(), which means every one of those responses was written into
+// Cache Storage. Its scope is the whole app base, so that was not only the
+// till: the kitchen display and the DRIVER'S OWN PHONE were caching
+//
+//   GET /api/orders          every delivery customer's name, full address,
+//                            PSČ, phone and note
+//   GET /api/kitchen/orders  the same, per ticket
+//   GET /api/receipts        every receipt the restaurant has issued
+//   GET /api/timetables/:name guest names and phones on every booking slot
+//
+// to disk, indefinitely, with nothing purging it on logout. On a shared bar
+// tablet that is personal data outliving the staff member who fetched it,
+// readable by anyone holding the device — with no lawful basis and no
+// retention period.
+//
+// The fix is an allowlist, not a purge, because the strongest version of
+// "cleared on logout" is still weaker than never having written it down. What
+// the till genuinely needs in order to keep SELLING with the Wi-Fi down is the
+// menu and the prices — not the customer list.
+//
+// Everything the offline floor view needs beyond this is persisted by the page
+// itself into IndexedDB (POSDB), redacted on the way in: see loadAllTables()
+// and fetchIndoorWalkinOrders() in inner.js. That is deliberate rather than
+// convenient — the page knows which fields matter, so the decision lives in one
+// place next to the code that renders them, instead of being re-derived here
+// from URLs by a worker that would silently start caching PII again the day a
+// new endpoint is added.
+const CACHEABLE_API_ENDPOINTS = new Set([
+    "menu",        // dishes and prices — without this the till cannot take an order
+    "combos",      // same, for combo deals
+    "settings",    // VAT rates, opening hours, payment methods
+    "daily-menu",  // today's specials
+]);
+
+// First path segment after /api/. Query strings are excluded by `pathname`,
+// so `/api/daily-menu?date=` matches "daily-menu" — deliberate: the admin's
+// date override is the same non-PII payload.
+function apiEndpoint(url) {
+    const match = url.pathname.match(/\/api\/([^/?]+)/);
+    return match ? match[1] : null;
+}
+
+function isCacheableApi(url) {
+    const endpoint = apiEndpoint(url);
+    return endpoint !== null && CACHEABLE_API_ENDPOINTS.has(endpoint);
+}
+
 // Network-first with a short timeout, falling back to whatever was cached.
-// Used for GET /api/* so a till that just went offline shows the last known
-// menu and order list instead of an error page.
+//
+// Used ONLY for the allowlisted config endpoints (see CACHEABLE_API_ENDPOINTS),
+// so a till that just went offline still has a menu and prices to sell from.
+// It used to be used for every GET /api/*, which is how customer data ended up
+// on disk (finding M2). The order list is no longer served from here — the page
+// keeps its own redacted copy in IndexedDB.
 async function networkFirst(request, timeoutMs) {
     const cache = await caches.open(CACHE_NAME);
     try {
@@ -117,7 +179,16 @@ self.addEventListener("fetch", event => {
     if (url.origin !== self.location.origin) return;
 
     if (isApiRequest(url)) {
-        event.respondWith(networkFirst(request, 4000));
+        // Allowlisted, non-PII config: network-first, so the till still has a
+        // menu when the Wi-Fi drops. See CACHEABLE_API_ENDPOINTS.
+        if (isCacheableApi(url)) {
+            event.respondWith(networkFirst(request, 4000));
+        }
+        // Everything else: NOT handled here at all. Returning without calling
+        // respondWith hands the request back to the browser untouched, so it
+        // goes to the network and nothing is written to disk. Deliberately not
+        // `respondWith(fetch(request))` — that would be an identical outcome
+        // today and a place for a cache.put to be added back tomorrow.
         return;
     }
 

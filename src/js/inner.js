@@ -198,9 +198,13 @@ async function tryConnect(url) {
 // wrong thing to show someone whose problem is that there is no network.
 // The whole offline-first effort would be invisible behind that overlay.
 //
-// Everything the floor view needs (timetables, menu, the order list) is a
-// GET under /api/, which the service worker serves from its cache when the
-// network is unreachable — so loadAllTables() below genuinely works here.
+// loadAllTables() below genuinely works here, but no longer because the
+// service worker replays the API. Since finding M2 the worker caches only the
+// non-PII config endpoints (menu, combos, settings, daily-menu); the floor plan
+// and the open-order list come from this device's own IndexedDB, written
+// redacted while it last had a server. So the room renders, the menu has
+// prices, and walk-in sales work — while the day's bookings, which are the part
+// carrying guest names and phone numbers, are simply not available offline.
 async function enterOfflineMode() {
     // We just proved the server is unreachable — record it, so the status
     // pill agrees with the connection label instead of contradicting it.
@@ -842,6 +846,64 @@ async function fetchIndoorWalkinOrders() {
     indoorWalkinOrders = posReady ? posMergeOrders(serverList) : serverList;
 }
 
+// ── OFFLINE FLOOR PLAN (finding M2) ─────────────────────────────────────
+//
+// The service worker no longer caches GET /api/timetables/:name, because those
+// responses carry guest names and phone numbers and it was writing them to the
+// device's disk for good. But the till still has to know what tables exist to
+// sell anything with the Wi-Fi down, so the page keeps its own copy — REDACTED
+// on the way in, and in IndexedDB where the app can see and clear it.
+//
+// What survives is the table's own shape: name, id, description, attributes,
+// seat count, floorplan placement. What does not is `data` — the reservation
+// grid, i.e. every guest name, phone and preorder. A waiter offline can take
+// walk-in orders at any table; they cannot read the day's bookings, which is
+// the correct trade rather than a limitation to work around. `data: {}` rather
+// than omitted so the rendering code that reads `t.data` needs no offline
+// special case.
+const OFFLINE_FLOORPLAN_KEY = 'floorplan';
+
+function redactTableForOffline(t) {
+    return {
+        className: t.className,
+        fileId: t.fileId,
+        info: t.info || '',
+        attributes: t.attributes || [],
+        seats: typeof t.seats === 'number' ? t.seats : null,
+        layout: t.layout || null,
+        data: {},
+    };
+}
+
+async function saveOfflineFloorplan(loaded) {
+    if (!posReady) return;
+    try {
+        await POSDB.meta.put({
+            key: OFFLINE_FLOORPLAN_KEY,
+            savedAt: new Date().toISOString(),
+            tables: Object.values(loaded).map(redactTableForOffline),
+        });
+    } catch (e) {
+        // Never fatal: failing to prepare for offline must not break being
+        // online, which is the state we are demonstrably in right now.
+        console.error('[pos] could not persist the offline floor plan', e);
+    }
+}
+
+async function loadOfflineFloorplan() {
+    if (!posReady) return null;
+    try {
+        const row = await POSDB.meta.get(OFFLINE_FLOORPLAN_KEY);
+        if (!row || !Array.isArray(row.tables) || row.tables.length === 0) return null;
+        const byName = {};
+        for (const t of row.tables) if (t && t.className) byName[t.className] = t;
+        return byName;
+    } catch (e) {
+        console.error('[pos] could not read the offline floor plan', e);
+        return null;
+    }
+}
+
 async function loadAllTables() {
     try {
         const res = await apiFetch(`${API_URL}/timetables`);
@@ -858,6 +920,9 @@ async function loadAllTables() {
             } catch (e) { console.error('Failed to load', name, e); }
         }
         tables = loaded;
+        // Same shape as fetchIndoorWalkinOrders' bulkPut above: persist what the
+        // next offline start will need, while we have a server to ask.
+        await saveOfflineFloorplan(loaded);
         // A table create/rename/delete may have happened since the last
         // fetch (this reload is how all three of those surface) — the
         // cached QR tokens key off className, so a stale cache here would
@@ -870,6 +935,26 @@ async function loadAllTables() {
         else { currentView = 'overview'; switchView('overview'); }
     } catch (e) {
         console.error(e);
+
+        // Offline. The service worker no longer holds these responses (M2), so
+        // fall back to the redacted floor plan this device saved while it last
+        // had a server. Without this the room reads as EMPTY, which is a worse
+        // lie than a stale one — the same reasoning as the serverOrders
+        // fallback in fetchIndoorWalkinOrders above.
+        const offline = await loadOfflineFloorplan();
+        if (offline) {
+            tables = offline;
+            tableQrTokensCache = null;
+            await fetchIndoorWalkinOrders();
+            renderSidebar();
+            if (currentView === 'overview') renderOverview();
+            else { currentView = 'overview'; switchView('overview'); }
+            // Said plainly, because the difference matters to a waiter standing
+            // at a table: they can sell, but they cannot see today's bookings.
+            showToast('Offline — stoly ze zařízení, rezervace nejsou k dispozici', true);
+            return;
+        }
+
         showToast('Nepodařilo se načíst stoly', true);
     }
 }
