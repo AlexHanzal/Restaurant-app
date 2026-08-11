@@ -58,6 +58,8 @@ const RATE_LIMITS = {
     tableOrderPerTable: 12,
     tableStatusPerTable: 240,
     cancelIp: 60,
+    orderIp: 5,
+    orderPhone: 5,
 };
 
 // Generous backstop applied to the whole /api surface — catches scripted
@@ -207,6 +209,59 @@ const tableStatusLimiter = rateLimit({
     legacyHeaders: false,
     keyGenerator: (req) => req.tableFileId || "unresolved-table",
     message: { error: "Příliš mnoho požadavků. Zkuste to prosím za chvíli." },
+});
+
+// ── DELIVERY ORDER LIMITERS ─────────────────────────────────────────────
+// Review 2026-08-10, finding N2 (and 2026-08-08's M1 before it).
+//
+// POST /orders is public, unauthenticated and un-verified: no session, no SMS
+// code, no proof of intent. Until these two limiters it was bounded only by
+// the 3000/15min /api backstop, which is not a limit on this route in any
+// meaningful sense — a script could post hundreds of cash-on-delivery orders
+// with fabricated names and addresses inside the PSČ whitelist, and each one
+// lands on the kitchen board as a real ticket. The cost of a fake order is not
+// a database row: it is food cooked and a driver sent across town.
+//
+// The asymmetry is what made this worth fixing. QR table ordering got a signed
+// capability token, two carefully-keyed limiters, a settings gate and an
+// `enabled: false` default. Delivery ordering — the channel where a fake order
+// costs the most — got nothing.
+//
+// Since the routing feature landed there is a second cost: every accepted
+// order also triggers an outbound Nominatim lookup. Nominatim's usage policy
+// is binding (see geocode.js), and the way an installation breaches it is
+// exactly a flood of distinct fabricated addresses. The documented consequence
+// is the restaurant's IP being blocked, and the symptom is "batching quietly
+// stopped working" — for real orders, indefinitely.
+//
+// SIZED FOR A HOUSEHOLD, NOT A VENUE, and that is the opposite of the table
+// limiters above — deliberately. A delivery order is placed from the
+// customer's own home or phone, not from the restaurant's Wi-Fi, so there is
+// no NAT-shared-address problem here. 5/hour is several times what a real
+// household does and still makes a script pay.
+const orderIpLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: RATE_LIMITS.orderIp,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Z této adresy přišlo příliš mnoho objednávek. Zkuste to prosím později, nebo nám zavolejte." },
+});
+
+// The per-IP limiter above is defeated by rotating addresses, which is cheap.
+// This one is keyed on the phone number the order says to call, because that
+// is the one field a fake order cannot make useless to itself: a driver has to
+// be able to ring the customer, so a script that randomises the phone produces
+// orders nobody can deliver, and one that reuses a number hits this.
+//
+// Shares normalizePhoneForRateLimit with smsPhoneLimiter so "+420 600 123 456"
+// and "+420600123456" are one bucket rather than two.
+const orderPhoneLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: RATE_LIMITS.orderPhone,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => normalizePhoneForRateLimit(req.body && req.body.phone) || "unknown-phone",
+    message: { error: "Na toto telefonní číslo už je objednávek dost. Zkuste to prosím později, nebo nám zavolejte." },
 });
 
 // ── GUEST SELF-CANCELLATION LIMITER ─────────────────────────────────────
@@ -437,6 +492,8 @@ module.exports = {
     tableOrderTableLimiter,
     tableStatusLimiter,
     cancelIpLimiter,
+    orderIpLimiter,
+    orderPhoneLimiter,
     isAccountLocked,
     recordFailedLogin,
     clearFailedLogins,

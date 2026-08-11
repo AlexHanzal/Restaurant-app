@@ -3881,8 +3881,24 @@ function setupAPIRoutes() {
         if (!order || order.batchId || order.geoStatus !== "ok" || order.status !== "pending") return;
 
         const now = new Date();
-        const allOrders = db.list(COL.orders);
-        const byId = new Map(allOrders.map(o => [o.id, o]));
+
+        // FINDING N2: this used to be `db.list(COL.orders)` — every delivery
+        // order ever written, JSON-parsed, on a path an anonymous POST /orders
+        // triggers. Two changes, and the split between them is deliberate:
+        //
+        //   - batch MEMBERS are resolved with db.get, which is a primary-key
+        //     lookup rather than a scan. A batch holds at most cfg.maxStops
+        //     (capped at 6), so this is a handful of indexed reads and — the
+        //     point — it preserves the old semantics EXACTLY. Resolving members
+        //     out of a windowed list instead would silently stop an older batch
+        //     accepting joins, which is a behaviour change dressed up as an
+        //     optimisation.
+        //   - PARTNER candidates come from the board window, the same bound
+        //     sweepPendingGeocodes() uses. A closed order from last year was
+        //     never a legitimate partner: routing.isBatchAcceptingJoins already
+        //     rejects it on age, so narrowing the input changes nothing except
+        //     how much this costs.
+        const windowOrders = kitchenBoard.filterForBoard(db.list(COL.orders), { now });
 
         // 1) An existing open batch that would accept it. When more than one
         //    would, the nearest centroid wins; ties break on batch id so
@@ -3890,7 +3906,7 @@ function setupAPIRoutes() {
         const candidates = [];
         for (const batch of db.list(COL.deliveryBatches)) {
             if (batch.status !== "open") continue;
-            const members = batch.orderIds.map(id => byId.get(id)).filter(Boolean);
+            const members = batch.orderIds.map(id => db.get(COL.orders, id)).filter(Boolean);
             if (members.length !== batch.orderIds.length) continue;
             if (!routing.isBatchAcceptingJoins(members, now, cfg)) continue;
             if (!routing.canJoin(members, order, cfg)) continue;
@@ -3909,7 +3925,7 @@ function setupAPIRoutes() {
         // 2) Otherwise a lone order nearby, which brings a new batch into
         //    existence. Batches of one are never created — a lone order is just
         //    a lone order (spec §8.1).
-        const partners = allOrders
+        const partners = windowOrders
             .filter(o => o.id !== orderId
                 && o.status === "pending"
                 && !o.batchId
@@ -3960,9 +3976,32 @@ function setupAPIRoutes() {
     // customer already has their confirmation. A geocoder outage, rate-limit, or
     // unparseable address can never block or slow a sale (spec §14) — the worst
     // case is one order sitting in the driver's "poloha neznámá" tail.
+    //
+    // FINDING N2 — the queue is bounded, and the backlog is no longer only in
+    // memory. geocode.js serialises every lookup at one per 1.1s by policy, so
+    // an unbounded producer here is not a queue, it is a growing wait: a flood
+    // of distinct fabricated addresses would sit in `queueTail` for the better
+    // part of an hour, delaying the geocoding of the real orders behind them.
+    // The limiters on POST /orders are the first defence; this is the second,
+    // and it also fixes something the 2026-08-10 review noted separately —
+    // `queueTail` lives in process memory, so a restart used to drop every
+    // pending lookup with only a boot-time backfill to recover.
+    //
+    // An order that does not get enqueued keeps geoStatus "pending" and is
+    // picked up by the sweep below. Nothing is lost; it just waits.
+    const MAX_INFLIGHT_GEOCODES = 25;
+    const inflightGeocodes = new Set();
+
     function scheduleGeocode(orderId) {
         const cfg = routingCfg();
         if (!cfg.enabled || !geocode.isEnabled()) return;
+        // Already queued — the sweep runs every minute and would otherwise
+        // enqueue the same order repeatedly while its first lookup waits its
+        // turn behind the 1.1s spacing.
+        if (inflightGeocodes.has(orderId)) return;
+        if (inflightGeocodes.size >= MAX_INFLIGHT_GEOCODES) return;
+
+        inflightGeocodes.add(orderId);
         setImmediate(async () => {
             try {
                 const order = db.get(COL.orders, orderId);
@@ -3977,26 +4016,40 @@ function setupAPIRoutes() {
                 broadcastBoardEvent();
             } catch (e) {
                 console.error("Background geocode failed:", e);
+            } finally {
+                inflightGeocodes.delete(orderId);
             }
         });
     }
 
-    // Orders written before this feature have no geoStatus at all. Enqueue any
-    // that a driver could still act on. Bounded by the same board window the
-    // kitchen uses, so this can never walk the whole order history.
-    function backfillGeocoding() {
+    // Enqueues anything a driver could still act on that has no coordinates
+    // yet: orders written before this feature existed (no geoStatus at all),
+    // and orders left "pending" by a restart or by the in-flight cap above.
+    //
+    // Bounded by the same board window the kitchen uses, so this can never walk
+    // the whole order history. Deliberately does NOT retry geoStatus "failed" —
+    // geocode.js already does its own negative caching with a retry floor and
+    // an attempt cap, and re-asking here would defeat both.
+    function sweepPendingGeocodes() {
         const cfg = routingCfg();
         if (!cfg.enabled || !geocode.isEnabled()) return;
         const recent = kitchenBoard.filterForBoard(db.list(COL.orders), { now: new Date() });
         for (const order of recent) {
             if (order.status !== "pending") continue;
-            if (order.geoStatus) continue; // already ok/failed/pending
-            db.patch(COL.orders, order.id, { geoStatus: "pending" });
+            if (order.geoStatus && order.geoStatus !== "pending") continue; // ok / failed
+            if (!order.geoStatus) db.patch(COL.orders, order.id, { geoStatus: "pending" });
             scheduleGeocode(order.id);
         }
     }
 
-    app.post(`${api}/orders`, requireFeature("delivery"), V.validate(V.createOrderSchema), async (req, res) => {
+    // SECURITY (review 2026-08-10, finding N2): the two limiters are the only
+    // thing between this route and a script that costs the restaurant real food
+    // and a real driver's hour per request — see their sizing rationale in
+    // security.js. requireFeature stays FIRST, so an installation without
+    // delivery answers 404 rather than leaking a 429 that confirms the route
+    // exists; the limiters go before validation so a malformed flood is capped
+    // too.
+    app.post(`${api}/orders`, requireFeature("delivery"), security.orderIpLimiter, security.orderPhoneLimiter, V.validate(V.createOrderSchema), async (req, res) => {
         const { customerName, address, psc, phone, items, note, paymentMethod, email } = req.body || {};
 
         const settings = settingsStore.getSettings();
@@ -4297,7 +4350,7 @@ function setupAPIRoutes() {
             const now = new Date();
             const driverId = req.user.id;
 
-            backfillGeocoding();
+            sweepPendingGeocodes();
 
             // PRIVACY: filter server-side. The old flat list shipped every
             // pending order to every driver and let driver.js hide other
@@ -6040,6 +6093,21 @@ async function start() {
     };
     pruneIdempotency();
     setInterval(pruneIdempotency, 60 * 60 * 1000).unref();
+
+    // FINDING N2: the geocode backlog used to exist only inside geocode.js's
+    // in-memory promise chain, recovered only by the on-demand sweep the driver
+    // route happens to call. A restart between an order arriving and its lookup
+    // completing left that order without coordinates until a driver next opened
+    // their route — and if no driver did, permanently. This sweep is what makes
+    // "pending" a durable state rather than a hopeful one. Unref'd, like every
+    // other housekeeping timer here.
+    setInterval(() => {
+        try {
+            sweepPendingGeocodes();
+        } catch (e) {
+            console.error("Geocode sweep failed:", e);
+        }
+    }, 60 * 1000).unref();
 
     // Printed unconditionally, unlike the warnings below: a wrong timezone
     // never announces itself as an error, it just reports the wrong day. The
