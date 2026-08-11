@@ -30,6 +30,13 @@
 // be "Tento týden".
 let salesPeriod = 7;
 
+// Must match STAFF_HISTORY_DAYS in src/server/staff-scope.js. Duplicated
+// rather than served, because the server is the authority and this is only
+// deciding which tabs to draw — if the two ever disagree, the server wins and
+// the worst outcome is a tab that comes back clamped, which the caption below
+// then explains.
+const STAFF_HISTORY_DAYS = 7;
+
 const PERIODS = [
     { days: 1, label: 'Dnes', caption: 'Dnešek od půlnoci' },
     { days: 7, label: '7 dní', caption: 'Posledních 7 dní' },
@@ -115,12 +122,28 @@ async function fetchSalesStats(days) {
 // Flush-left tab strip, text labels on a shared baseline — NOT filled pills.
 // The active tab is marked by weight plus a 2px accent underline (CSS).
 
+// M4: a non-admin session may read a shift's worth of history, not a quarter's
+// (see staff-scope.js). The server clamps regardless — this only stops the UI
+// OFFERING a tab whose answer would come back shorter than its label promises,
+// which would read as the takings being wrong rather than as a permission.
+//
+// Reads the same isAdmin() the rest of this panel uses; classic <script> tags
+// share one global scope, so inner.js's copy is the one that answers. Falls
+// open to the full set if that function is somehow absent, because the server
+// is the thing actually enforcing this and a missing tab is worse than a
+// redundant one.
+function visiblePeriods() {
+    const admin = typeof isAdmin === 'function' ? isAdmin() : true;
+    if (admin) return PERIODS;
+    return PERIODS.filter(p => p.days <= STAFF_HISTORY_DAYS);
+}
+
 function buildPeriodSwitcher() {
     const nav = document.createElement('div');
     nav.className = 'inn-stat-tabs';
     nav.setAttribute('role', 'tablist');
 
-    PERIODS.forEach(period => {
+    visiblePeriods().forEach(period => {
         const active = period.days === salesPeriod;
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -216,7 +239,13 @@ function buildChartCard(data) {
 
     const caption = document.createElement('div');
     caption.className = 'inn-stat-chart-caption';
-    caption.textContent = period.caption;
+    // M4: if the server clamped the window it says so, and so do we. A screen
+    // that quietly showed a week when a quarter was asked for would be read as
+    // the takings being wrong, not as a permission — and an unexplained number
+    // in a money view is the one thing that gets a tool distrusted.
+    caption.textContent = data.historyLimitedTo
+        ? `${period.caption} — delší historii vidí jen administrátor`
+        : period.caption;
     card.appendChild(caption);
 
     const chart = data.chart || { unit: 'day', buckets: [] };

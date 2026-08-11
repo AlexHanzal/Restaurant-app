@@ -359,8 +359,19 @@ function requireDriver(req, res, next) {
 // this expresses: admins always pass; a session that is a driver and nothing
 // else does not.
 //
-// Deliberately NOT applied to GET ${api}/orders — driver.js needs the order
-// list (names, addresses) to actually deliver. That route stays requireAuth.
+// HISTORICAL NOTE, kept because the reasoning is instructive: this comment used
+// to say "deliberately NOT applied to GET ${api}/orders — driver.js needs the
+// order list (names, addresses) to actually deliver", and that was true when it
+// was written. It stopped being true when delivery routing shipped: driver.js
+// now gets its work from POST ${api}/driver/route, which filters per driver
+// server-side instead of shipping every order to every phone.
+//
+// The stale exemption outlived the constraint by two features, and left the
+// worst PII read in the app (every delivery customer's name, address and phone,
+// forever) open to any session — finding M4. GET ${api}/orders is requireAdmin
+// as of 2026-08-11. The lesson worth keeping: an exemption justified by another
+// module's needs has to be re-checked when that module changes, because nothing
+// else will notice.
 function requireStaff(req, res, next) {
     requireAuth(req, res, () => {
         if (req.user.isAdmin || !req.user.isDriver) return next();

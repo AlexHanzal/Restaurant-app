@@ -210,7 +210,8 @@ const salesStats = require("./sales-stats"); // pure aggregation for GET /stats/
 const settingsStore = require("./settings"); // restaurant settings singleton (hours/closed days/pause/delivery rules) — see settings.js
 const timetable = require("./timetable"); // pure date/slot-occupancy rules shared with the customer-facing availability logic — see timetable.js
 const reservationCancel = require("./reservation-cancel"); // guest self-cancellation: token + refusal policy — see reservation-cancel.js
-const reservationRetention = require("./reservation-retention"); // deletes past unpaid bookings — implements the published privacy policy, see its header
+const reservationRetention = require("./reservation-retention");
+const staffScope = require("./staff-scope"); // how much history a non-admin may read, and what never goes on the wire — see its header (M4) // deletes past unpaid bookings — implements the published privacy policy, see its header
 const verificationCodes = require("./verification-codes"); // finding M3: TTL/attempts/cooldown rules for SMS-verification pending codes, shared by the reservation and reorder flows — see its header
 const kitchenBoard = require("./kitchen-board"); // which orders GET /kitchen/orders still needs to send — see kitchen-board.js
 const notify = require("./notify"); // customer notifications: SMS (Twilio) + optional e-mail (nodemailer) — see notify.js, go-live Task 4
@@ -3151,8 +3152,18 @@ function setupAPIRoutes() {
             // (guest names, phones, preorders, receipt ids). Unauthenticated
             // callers get a whitelisted occupancy-only view. See
             // sanitizeTimetableForPublic's header comment.
+            // M4 / N4 leftover: the staff view is the full record MINUS the
+            // booking slots' `cancelToken`. That token is the credential texted
+            // to the guest — whoever holds it can cancel that booking — and it
+            // was going to every authenticated caller here, drivers included.
+            //
+            // This is not a scoping judgement, it is a value that should never
+            // have been on the wire: nothing under src/js/ reads it (checked),
+            // and the routes that cancel a booking address a slot by date,
+            // weekday and hour rather than by token. Stripped for admins too —
+            // see stripTimetableSecrets' header.
             const isStaff = !!getAuthenticatedUserIfAny(req);
-            res.json(isStaff ? found : sanitizeTimetableForPublic(found));
+            res.json(isStaff ? staffScope.stripTimetableSecrets(found) : sanitizeTimetableForPublic(found));
         } catch {
             res.status(500).json({ error: "Server error" });
         }
@@ -4482,7 +4493,19 @@ function setupAPIRoutes() {
     });
 
     // GET — full order list, including customer name/address/phone. Staff-only.
-    app.get(`${api}/orders`, requireFeature("delivery"), requireAuth, (req, res) => {
+    // M4: requireADMIN, not requireAuth. This returns every delivery order ever
+    // written — customer name, full street address, PSČ, phone and note — and
+    // it was readable by any session, including a driver's phone. It was the
+    // single worst exposure in that finding.
+    //
+    // The reason it was left open no longer exists: requireStaff's comment in
+    // auth.js said "deliberately NOT applied to GET /orders — driver.js needs
+    // the order list to actually deliver", and that was true when written.
+    // driver.js now gets its work through POST /driver/route, which filters
+    // server-side per driver (see the PRIVACY note there). Checked at the time
+    // of this change: NO client code calls this route at all — not inner.js,
+    // not driver.js, not kitchen.js. It survives as an admin/ops read.
+    app.get(`${api}/orders`, requireFeature("delivery"), requireAdmin, (req, res) => {
         try {
             const orders = db.list(COL.orders);
             orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -5324,7 +5347,11 @@ function setupAPIRoutes() {
 
     // ── DRIVERS ──────────────────────────────────────────────────────────
 
-    app.get(`${api}/drivers`, requireFeature("delivery"), requireAuth, (req, res) => {
+    // M4: admin only. The roster of driver accounts with their login
+    // usernames — reconnaissance for a credential attack, served to every
+    // session. No client code calls it (checked): drivers are created from the
+    // admin panel and driver.js never lists its colleagues.
+    app.get(`${api}/drivers`, requireFeature("delivery"), requireAdmin, (req, res) => {
         try {
             const drivers = db.list(COL.drivers).map(({ password, ...safe }) => safe);
             res.json(drivers);
@@ -5646,18 +5673,35 @@ function setupAPIRoutes() {
 
     app.get(`${api}/stats/sales`, requireAuth, (req, res) => {
         try {
-            const days = parseInt(req.query.days, 10);
-            if (!ALLOWED_STATS_DAYS.includes(days)) {
+            const requested = parseInt(req.query.days, 10);
+            if (!ALLOWED_STATS_DAYS.includes(requested)) {
                 return res.status(400).json({ error: "Neplatné období" });
             }
-            res.json(salesStats.computeSalesStats({
-                orders: db.list(COL.orders),
-                timetables: db.list(COL.timetables),
-                indoorOrders: db.list(COL.indoorOrders),
-                menu: db.get(COL.menu, MENU_SINGLETON_ID) || {},
-                days,
-                now: new Date(),
-            }));
+
+            // M4: staff keep this screen — the comment above is still right that
+            // taking it away would break the floor — but they get a shift's
+            // worth of history rather than a quarter of it. 90 days of revenue
+            // is what made a stolen waiter password worth stealing.
+            //
+            // Clamped, not refused: a 403 would blank the screen for a waiter
+            // who tapped the wrong tab, turning a privacy control into an
+            // outage. `historyLimitedTo` goes back in the response so the UI can
+            // say why the number is smaller than the tab they pressed —
+            // silently showing 7 days for a 90-day request would read as a bug
+            // in the takings.
+            const scope = staffScope.clampDays(requested, req.user);
+
+            res.json({
+                ...salesStats.computeSalesStats({
+                    orders: db.list(COL.orders),
+                    timetables: db.list(COL.timetables),
+                    indoorOrders: db.list(COL.indoorOrders),
+                    menu: db.get(COL.menu, MENU_SINGLETON_ID) || {},
+                    days: scope.days,
+                    now: new Date(),
+                }),
+                ...(scope.limited ? { historyLimitedTo: scope.limitDays } : {}),
+            });
         } catch (e) {
             console.error("Sales stats failed:", e);
             res.status(500).json({ error: "Failed to compute sales stats" });
@@ -5674,7 +5718,17 @@ function setupAPIRoutes() {
     // datetime strings) filter on issuedAt.
     app.get(`${api}/receipts`, requireAuth, (req, res) => {
         try {
-            const { from, to } = req.query || {};
+            // M4: a non-admin session gets a shift's worth of receipts, not the
+            // archive. An unbounded ?from= was the exposure — "every receipt the
+            // restaurant has ever issued" is precisely what a leaked waiter
+            // password was worth, and a receipt carries the itemised sale.
+            //
+            // Note this clamps the MISSING case too: for a non-admin, no `from`
+            // no longer means "everything", it means the earliest date they may
+            // see. Reprinting today's receipt or handling a complaint about the
+            // weekend still works; reading last spring does not.
+            const scope = staffScope.clampRange(req.query.from, req.query.to, req.user);
+            const { from, to } = scope;
             // H4: this used to be db.list(COL.receipts) — every receipt the
             // restaurant has ever issued, JSON-parsed, on every request, before
             // filtering in JavaScript. Receipts are the one collection that
@@ -5696,6 +5750,12 @@ function setupAPIRoutes() {
                 if (!isNaN(toDate.getTime())) receipts = receipts.filter(r => new Date(r.issuedAt) <= toDate);
             }
             receipts.sort((a, b) => new Date(b.issuedAt) - new Date(a.issuedAt));
+
+            // An array before, an array now — the frontend maps over it. The
+            // limit is reported in a header rather than by wrapping the body in
+            // an object, so a screen that never looks at it keeps working
+            // unchanged and one that wants to explain itself can.
+            if (scope.limited) res.set("X-History-Limited-Days", String(scope.limitDays));
             res.json(receipts);
         } catch (e) {
             console.error("Failed to list receipts:", e);
@@ -5730,7 +5790,11 @@ function setupAPIRoutes() {
     // public: pending/confirmed/failed counts plus the oldest unreported
     // sale are revenue-shaped information (same reasoning as GET
     // /stats/sales above), not something to hand an anonymous caller.
-    app.get(`${api}/eet/health`, requireFeature("eet"), requireAuth, (req, res) => {
+    // M4: admin only. This is the tax-filing state of the business — how many
+    // sales are queued, failing, or past their deadline. No client code calls
+    // it (checked); it exists for the owner and for monitoring, and neither is
+    // a waiter's tablet.
+    app.get(`${api}/eet/health`, requireFeature("eet"), requireAdmin, (req, res) => {
         res.json({
             enabled: SERVER_CONFIG.eet.enabled,
             mode: SERVER_CONFIG.eet.playground ? "playground" : "production",

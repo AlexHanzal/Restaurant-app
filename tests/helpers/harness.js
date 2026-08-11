@@ -66,6 +66,9 @@ const COL = {
     settings: "settings",
     payments: "payments",
     orders: "orders",
+    // Finding M4 (2026-08-11) — needed to seed a receipt archive and prove a
+    // non-admin session only reaches a shift's worth of it.
+    receipts: "receipts",
     // Delivery routing/batching (spec 2026-08-08) — see server.js's COL.deliveryBatches.
     deliveryBatches: "delivery_batches",
     // Finding M3 (2026-08-11) — pending SMS-verification codes, one row per

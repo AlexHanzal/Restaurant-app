@@ -8,8 +8,12 @@
 // re-password one, and requireAuth verified the cookie's signature and then
 // trusted the payload — it never re-read the user table. So offboarding a
 // waiter or a driver meant editing SQLite by hand, and even that left their
-// session working for the rest of its 12 hours, with GET /api/orders (every
-// customer's name, address and phone) guarded by requireAuth alone.
+// session working for the rest of its 12 hours — and at the time, GET
+// /api/orders (every customer's name, address and phone) was guarded by
+// requireAuth alone, so that session could read the lot. Finding M4 has since
+// closed that particular route to admins, which narrows the blast radius but
+// does not change what this file is about: a revoked session must stop working
+// everywhere, not just on the worst route.
 //
 // THE CENTRAL CASE IN THIS FILE is "a session already open dies the moment the
 // account is deactivated". Everything else — the routes, the flags, the
@@ -108,12 +112,18 @@ function authedPost(server, session, path, body) {
     });
 }
 
-// GET /api/orders is the route the finding is actually about: requireAuth
-// alone, and it answers with every delivery customer's name, address and
-// phone. "Is this session still alive?" therefore asks exactly the question
-// that matters, rather than a harmless one.
+// "Is this session still alive?" — asked of a route that ANY live staff session
+// may reach, so a 403 can never be mistaken for a dead session.
+//
+// This used to ask GET /api/orders, chosen because that route was guarded by
+// requireAuth alone and answered with every delivery customer's name, address
+// and phone — the sharpest possible way to ask. Finding M4 closed it to admins
+// (see staff-scope.js), so as a probe it now returns 403 for exactly the
+// non-admin sessions these tests are about, which reads as "revoked" when the
+// session is fine. GET /indoor-orders is the replacement: requireAuth, no role
+// beyond that, and it is what the till itself polls.
 function pingAsSession(server, cookie) {
-    return fetch(`${server.api}/orders`, { headers: { cookie } });
+    return fetch(`${server.api}/indoor-orders`, { headers: { cookie } });
 }
 
 // ── SUITE ────────────────────────────────────────────────────────────────
