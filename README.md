@@ -65,6 +65,59 @@ Everything else about staff accounts — deactivating, resetting a password —
 goes through the admin panel once this first one exists; this script's only
 job is bootstrapping the very first login.
 
+## Zálohování a obnovení
+
+Celá restaurace je jeden soubor SQLite: rezervace, objednávky a **účtenky, které
+je ze zákona nutné uchovávat 5–10 let**. Ztráta toho souboru není výpadek, je to
+účetní problém s termínem.
+
+```bash
+node deploy/backup.js                 # záloha do <složka databáze>/backups
+node deploy/backup.js --dir /mnt/nas --keep 30
+node deploy/restore.js <soubor.db>    # obnovení (aplikace musí být zastavená)
+```
+
+**Zálohovat se dá za provozu.** Skript používá vestavěnou zálohovací funkci
+SQLite, ne kopírování souboru — `cp app.db` je tady tichá past: databáze běží v
+režimu WAL, takže část potvrzených dat leží v `app.db-wal` a v hlavním souboru
+ještě není. Zkopírovaný soubor vypadá jako databáze a chybějící data se objeví
+až při obnovování.
+
+Každá záloha se hned po vytvoření otevře a zkontroluje (`integrity_check` plus
+porovnání počtu záznamů s živou databází). Když kontrola neprojde, soubor se
+smaže — poškozená záloha ve složce je horší než žádná, protože vypadá jako
+dobrá a je to ta, po které při obnovování člověk sáhne.
+
+### Nastavit to jako cron
+
+```cron
+# každý den ve 4:00; při chybě skript skončí nenulovým kódem, takže se cron ozve
+0 4 * * * cd /opt/restaurace && /usr/bin/node deploy/backup.js --quiet
+```
+
+Zálohy patří **jinam než na stejný disk** — `--dir` na připojený síťový disk
+nebo je odtud pravidelně kopírovat pryč. Záloha vedle originálu chrání před
+smazáním a chybou aplikace, ne před selháním disku.
+
+### Vyzkoušet obnovení, dokud je čas
+
+Záloha, kterou nikdo nikdy neobnovil, není záloha, je to naděje. Udělejte to
+jednou nanečisto **před ostrým spuštěním**, ne až bude potřeba:
+
+```bash
+node deploy/backup.js
+sudo systemctl stop restaurace          # aplikace nesmí běžet
+node deploy/restore.js data/backups/app-<datum>.db
+sudo systemctl start restaurace
+```
+
+Pak se přihlaste a zkontrolujte, že jsou vidět rezervace i účtenky. Obnovení
+před přepsáním uloží současnou databázi vedle jako `app.db.pre-restore-<datum>`,
+takže i špatně zvolený soubor jde vrátit zpět.
+
+Celý ten postup projede `tests/smoke/backup-restore.test.js` při každém spuštění
+testů — zálohuje, smaže databázi, obnoví ji a ověří, že data jsou zpátky.
+
 ### Když někdo odejde (deaktivace účtu)
 
 V **Uživatelé** má každý účet tlačítka **Heslo** a **Deaktivovat**.
@@ -132,14 +185,16 @@ single SQLite file — would need addressing at the same time.
 explains why: `deploy/NASAZENI.md` (Ubuntu VPS runbook — systemd + Caddy +
 HTTPS + backups), `deploy/GO-LIVE-CHECKLIST.md` (GoPay merchant account,
 Twilio sender, DNS, legal review, test matrix), `docs/CZ-PAYMENTS-SETUP.md`,
-`deploy/backup.sh`, `deploy/Caddyfile`, `deploy/restaurace.service` and
-`tools/` were all cloud-only OneDrive stubs that could not be read when this
+`deploy/Caddyfile`, `deploy/restaurace.service` and `tools/` were all cloud-only OneDrive stubs that could not be read when this
 repo was assembled, so they were deliberately left out rather than published
 unread. They are still in the original `Landing-app-1-main` folder — make
 them available offline in Explorer ("Always keep on this device"), check
 them for real credentials, and only then add them here.
-(`deploy/create-admin.js` itself is no longer on that list — see "The first
-admin account" above.)
+(`deploy/create-admin.js` and the backup scripts are no longer on that list —
+see "The first admin account" and "Zálohování a obnovení" above. Backups are
+`deploy/backup.js`/`deploy/restore.js` rather than the `backup.sh` this section
+used to promise: they need the same better-sqlite3 the app uses, so a Node
+script is one fewer thing that has to be installed on the box.)
 
 ## EET 2.0 — elektronická evidence tržeb
 
