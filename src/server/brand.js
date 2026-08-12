@@ -298,14 +298,25 @@ function isRawToken(name) {
     return RAW_TOKEN_NAMES.has(name);
 }
 
-function brandStyleTag() {
-    return `<style>:root{`
+// The CSS itself, without the <style> wrapper.
+//
+// Split out from brandStyleTag() so server.js can take a CSP hash of exactly
+// the bytes the browser will see between the tags — a hash covers the element's
+// CONTENT, so hashing the wrapped version would never match. Keeping both in
+// one place means the tag and the hash cannot drift apart: change this string
+// and the hash changes with it (finding L2).
+function brandStyleCss() {
+    return `:root{`
         + `--ds-accent:${config.brand.accent};`
         + `--ds-accent-hover:${config.brand.accentHover};`
         + `--ds-accent-soft:${config.brand.accentSoft};`
         + `--ds-warn-ink:${config.brand.accent};`
         + `--ds-danger:${config.brand.accent};`
-        + `}</style>`;
+        + `}`;
+}
+
+function brandStyleTag() {
+    return `<style>${brandStyleCss()}</style>`;
 }
 
 // The page a "back to the app" link should point at, given which features
@@ -356,4 +367,7 @@ module.exports = {
     tokenValues,
     renderTokens,
     homePath,
+    // Exported so server.js can CSP-hash exactly the bytes that go between the
+    // <style> tags — see brandStyleCss()'s comment (L2).
+    brandStyleCss,
 };

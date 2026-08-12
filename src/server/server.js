@@ -1828,6 +1828,67 @@ const RECEIPT_PRINT_SCRIPT = "document.getElementById('printBtn').addEventListen
 // Server-rendered, standalone printable receipt page — no dependency on the
 // app's own JS/CSS, so it works as a bare link a customer can open/print
 // directly (e.g. from an SMS/email confirmation) without loading the SPA.
+// L2: lifted out of the template literal so it can be CSP-hashed. It is fully
+// static - no interpolation - which is exactly the property a hash requires,
+// and tests/unit/csp.test.js asserts that, so an interpolated value cannot be
+// added later without the receipt page silently losing its styling.
+const RECEIPT_CSS = `
+    :root { color-scheme: light only; }
+    * { box-sizing: border-box; }
+    html { background: #fff; }
+    body {
+        font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+        max-width: 480px;
+        margin: 24px auto;
+        background: #fff;
+        padding: 0 16px;
+        color: #1a1a1a;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .subtitle { color: #555; margin: 0 0 20px; font-size: 13px; }
+    .seller { margin-bottom: 20px; }
+    .seller strong { display: block; font-size: 15px; }
+    .meta { display: flex; justify-content: space-between; margin-bottom: 20px; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 10px 0; }
+    .meta div { font-size: 13px; }
+    .meta .label { color: #666; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    th, td { text-align: left; padding: 6px 4px; font-size: 13px; }
+    thead th { border-bottom: 2px solid #333; font-weight: 600; }
+    tbody tr { border-bottom: 1px solid #eee; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    .total-row td { font-weight: 700; font-size: 15px; border-top: 2px solid #333; border-bottom: none; padding-top: 10px; }
+    .vat-table { margin-top: 4px; }
+    .vat-table th { border-bottom: 1px solid #999; font-weight: 600; font-size: 12px; color: #555; }
+    .not-vat-payer { font-style: italic; color: #555; margin: 16px 0; }
+    .eet { margin: 16px 0; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+    .eet-mode { color: #555; }
+    .eet-mode.playground { color: #b00020; font-weight: 700; }
+    /* Failed EET state must read as visibly distinct from the merely-pending
+       one (see RECEIPT_EET_FAILED_NOTICE) — same red used elsewhere on this
+       page for the playground warning, reused here rather than inventing a
+       second alarm color. Expressed as a CSS class, not inline style="...",
+       for plain readability/reuse — NOT because CSP forbids it: style-src
+       includes 'unsafe-inline' (see configureCsp() below), and this same
+       file uses inline style="..." elsewhere in this very function (the
+       "Způsob platby" row) and in renderReceiptNotFoundHtml()'s <body>. */
+    .eet-failed { border-color: #b00020; background: #fdecea; color: #7a0016; font-weight: 600; }
+    .footer { margin-top: 28px; text-align: center; color: #888; font-size: 12px; }
+    /* L2: was an inline style="text-align:right" on the payment-method cell.
+       Moved here so this page needs no style-src 'unsafe-inline' — the block
+       below is static and therefore hashable, an attribute is not. */
+    .align-right { text-align: right; }
+    @media print {
+        body { margin: 0 auto; }
+        .no-print { display: none; }
+    }
+    .print-btn {
+        display: block; margin: 20px auto 0; padding: 8px 20px;
+        font-size: 13px; cursor: pointer; border: 1px solid #333; background: #fff; border-radius: 4px;
+    }
+`;
+
 function renderReceiptHtml(receipt) {
     const rowsHtml = receipt.items.map(it => `
         <tr>
@@ -1894,58 +1955,7 @@ function renderReceiptHtml(receipt) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Účtenka ${escapeHtml(receipt.number)}</title>
-<style>
-    :root { color-scheme: light only; }
-    * { box-sizing: border-box; }
-    html { background: #fff; }
-    body {
-        font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-        max-width: 480px;
-        margin: 24px auto;
-        background: #fff;
-        padding: 0 16px;
-        color: #1a1a1a;
-        font-size: 14px;
-        line-height: 1.5;
-    }
-    h1 { font-size: 18px; margin: 0 0 4px; }
-    .subtitle { color: #555; margin: 0 0 20px; font-size: 13px; }
-    .seller { margin-bottom: 20px; }
-    .seller strong { display: block; font-size: 15px; }
-    .meta { display: flex; justify-content: space-between; margin-bottom: 20px; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 10px 0; }
-    .meta div { font-size: 13px; }
-    .meta .label { color: #666; }
-    table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-    th, td { text-align: left; padding: 6px 4px; font-size: 13px; }
-    thead th { border-bottom: 2px solid #333; font-weight: 600; }
-    tbody tr { border-bottom: 1px solid #eee; }
-    td.num, th.num { text-align: right; white-space: nowrap; }
-    .total-row td { font-weight: 700; font-size: 15px; border-top: 2px solid #333; border-bottom: none; padding-top: 10px; }
-    .vat-table { margin-top: 4px; }
-    .vat-table th { border-bottom: 1px solid #999; font-weight: 600; font-size: 12px; color: #555; }
-    .not-vat-payer { font-style: italic; color: #555; margin: 16px 0; }
-    .eet { margin: 16px 0; padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
-    .eet-mode { color: #555; }
-    .eet-mode.playground { color: #b00020; font-weight: 700; }
-    /* Failed EET state must read as visibly distinct from the merely-pending
-       one (see RECEIPT_EET_FAILED_NOTICE) — same red used elsewhere on this
-       page for the playground warning, reused here rather than inventing a
-       second alarm color. Expressed as a CSS class, not inline style="...",
-       for plain readability/reuse — NOT because CSP forbids it: style-src
-       includes 'unsafe-inline' (see configureCsp() below), and this same
-       file uses inline style="..." elsewhere in this very function (the
-       "Způsob platby" row) and in renderReceiptNotFoundHtml()'s <body>. */
-    .eet-failed { border-color: #b00020; background: #fdecea; color: #7a0016; font-weight: 600; }
-    .footer { margin-top: 28px; text-align: center; color: #888; font-size: 12px; }
-    @media print {
-        body { margin: 0 auto; }
-        .no-print { display: none; }
-    }
-    .print-btn {
-        display: block; margin: 20px auto 0; padding: 8px 20px;
-        font-size: 13px; cursor: pointer; border: 1px solid #333; background: #fff; border-radius: 4px;
-    }
-</style>
+<style>${RECEIPT_CSS}</style>
 </head>
 <body>
     <h1>Účtenka č. ${escapeHtml(receipt.number)}</h1>
@@ -1959,7 +1969,7 @@ function renderReceiptHtml(receipt) {
 
     <div class="meta">
         <div><span class="label">Datum a čas vystavení</span><br>${formatDateTime(receipt.issuedAt)}</div>
-        <div style="text-align:right"><span class="label">Způsob platby</span><br>${escapeHtml(receipt.paymentMethodLabel)}</div>
+        <div class="align-right"><span class="label">Způsob platby</span><br>${escapeHtml(receipt.paymentMethodLabel)}</div>
     </div>
 
     ${eetHtml}
@@ -1993,10 +2003,17 @@ function renderReceiptHtml(receipt) {
 </html>`;
 }
 
+// L2: the <body style="…"> this used to carry is now the hashable block below,
+// so the receipt routes need no style-src 'unsafe-inline'. Kept as its own tiny
+// stylesheet rather than pulled into the main receipt CSS because this page is
+// deliberately standalone — it renders when there is no receipt to style.
+const RECEIPT_NOT_FOUND_CSS = "body{font-family:sans-serif;text-align:center;margin-top:80px}";
+
 function renderReceiptNotFoundHtml() {
     return `<!DOCTYPE html>
-<html lang="cs"><head><meta charset="UTF-8"><title>Účtenka nenalezena</title></head>
-<body style="font-family:sans-serif; text-align:center; margin-top:80px;">
+<html lang="cs"><head><meta charset="UTF-8"><title>Účtenka nenalezena</title>
+<style>${RECEIPT_NOT_FOUND_CSS}</style></head>
+<body>
 <h1>Účtenka nenalezena</h1>
 <p>Tento odkaz na účtenku není platný nebo účtenka neexistuje.</p>
 </body></html>`;
@@ -2119,11 +2136,86 @@ function httpsRedirect(req, res, next) {
 // https://localhost:PORT/... and fail).
 const RECEIPT_SCRIPT_HASH = `'sha256-${crypto.createHash("sha256").update(RECEIPT_PRINT_SCRIPT, "utf8").digest("base64")}'`;
 
-function configureHelmet() {
+// ── style-src (finding L2) ──────────────────────────────────────────────
+//
+// `style-src 'unsafe-inline'` was consciously accepted at the time of the
+// 2026-08-08 review — correctly, because the blast radius for styles is small
+// and the alternative looked like rewriting every page. Re-measured on
+// 2026-08-11, that turned out not to be true of most of the app:
+//
+//   inline style="…" attributes, per surface
+//     inner.html + inner.js + sales-stats-view.js   92   (the admin panel)
+//     every other page and script                    0
+//
+// So the cost of dropping 'unsafe-inline' is confined to ONE page — the one
+// behind a login — while every anonymous-facing surface (the reservation page,
+// delivery, the QR menu, the cancellation page, the legal pages) plus the
+// kitchen and driver screens can have the strict policy for free.
+//
+// The one thing standing in the way everywhere was {{BRAND_STYLE}}, the
+// per-restaurant colour block that every page carries. It is fixed for the
+// process lifetime, so it takes a hash — exactly the trick already used for the
+// receipt print script above.
+//
+// STRICT IS THE DEFAULT, and the admin page opts out rather than the other way
+// round. A route added later and not thought about therefore gets the safe
+// policy, and the unsafe one exists in exactly one place with a comment on it.
+//
+// Note the hash and 'unsafe-inline' are mutually exclusive by specification:
+// when a hash or nonce is present the browser IGNORES 'unsafe-inline'. The
+// admin policy therefore carries 'unsafe-inline' and NO hash — adding both
+// would silently break its 92 attributes.
+function styleHash(css) {
+    return `'sha256-${crypto.createHash("sha256").update(css, "utf8").digest("base64")}'`;
+}
+
+// Every inline <style> block the app serves, hashed. Three, and each is static
+// for the process lifetime, which is what makes hashing possible at all:
+//
+//   BRAND_STYLE        the per-restaurant colour variables, on every page
+//   RECEIPT_CSS        the printable receipt at /uctenka/:receiptId
+//   RECEIPT_NOT_FOUND  the standalone "no such receipt" page
+//
+// The receipt pages are public and reached from a customer's SMS, so leaving
+// them on the permissive policy would have meant the two anonymous pages
+// most likely to be opened on a stranger's phone were the ones without it.
+// Their four inline style="…" attributes were moved into these blocks instead
+// — see the .align-right rule and RECEIPT_NOT_FOUND_CSS.
+const STRICT_STYLE_SRC = [
+    "'self'",
+    styleHash(brand.brandStyleCss()),
+    styleHash(RECEIPT_CSS),
+    styleHash(RECEIPT_NOT_FOUND_CSS),
+    "https://fonts.googleapis.com",
+];
+const ADMIN_STYLE_SRC = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"];
+
+// Renders a helmet-shaped directives object into a CSP header value, so the
+// admin page can be served a different policy than the global one. Matches
+// helmet's own contract: camelCase keys become kebab-case, `[]` is a
+// valueless directive (upgrade-insecure-requests), and `null` removes it.
+function serializeCsp(directives) {
+    return Object.entries(directives)
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([name, value]) => {
+            const kebab = name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
+            return value.length ? `${kebab} ${value.join(" ")}` : kebab;
+        })
+        .join("; ");
+}
+
+function cspDirectives(styleSrc) {
     const directives = {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", RECEIPT_SCRIPT_HASH],
-        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        // Blocks onclick="…" and friends. Stated explicitly rather than left to
+        // helmet's defaults, and that is load-bearing here rather than tidiness:
+        // the admin page's policy is serialised from THIS object by hand (see
+        // ADMIN_CSP_HEADER), so a directive that only exists as a helmet default
+        // silently vanishes from that one page. Caught by tests/smoke/csp.test.js
+        // comparing the two policies directive by directive.
+        scriptSrcAttr: ["'none'"],
+        styleSrc,
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
         imgSrc: ["'self'", "data:", "https:"],
         connectSrc: ["'self'"],
@@ -2140,9 +2232,16 @@ function configureHelmet() {
     // would break local http dev — see the header comment above). Setting
     // it to `null` explicitly removes that default directive.
     directives.upgradeInsecureRequests = isProd ? [] : null;
+    return directives;
+}
 
+// The header the admin page overrides itself with — see ADMIN_STYLE_SRC.
+// Built once at boot rather than per request; nothing in it varies.
+const ADMIN_CSP_HEADER = serializeCsp(cspDirectives(ADMIN_STYLE_SRC));
+
+function configureHelmet() {
     return helmet({
-        contentSecurityPolicy: { directives },
+        contentSecurityPolicy: { directives: cspDirectives(STRICT_STYLE_SRC) },
         // HSTS only makes sense once the browser has actually reached us
         // over HTTPS at least once — meaningless (and locally harmful, see
         // above) outside production.
@@ -2668,16 +2767,34 @@ function setupMiddleware() {
         });
     }
 
-    function makePageRoute(filename, extraTokens) {
+    // `opts.cspHeader` replaces the policy helmet set for this one page. Only
+    // inner.html uses it — see the comment on innerHtmlRoute below.
+    function makePageRoute(filename, extraTokens, opts = {}) {
         return async (req, res) => {
             const rawHtml = await loadHtmlTemplate(filename);
             if (rawHtml == null) return res.status(404).send("Stránka nenalezena");
+            if (opts.cspHeader) res.set("Content-Security-Policy", opts.cspHeader);
             res.set("Content-Type", "text/html; charset=utf-8");
             res.send(renderPage(rawHtml, extraTokens));
         };
     }
 
-    const innerHtmlRoute = makePageRoute("inner.html");
+    // THE ONE PAGE THAT STILL NEEDS style-src 'unsafe-inline' (finding L2).
+    //
+    // inner.html and the two scripts only it loads carry 92 inline style="…"
+    // attributes between them. Every other page in the app has none, so they
+    // all get the strict policy from configureHelmet(); this route replaces the
+    // header helmet already set with the one that tolerates them.
+    //
+    // Overriding here rather than weakening the global policy is the whole
+    // point: the exception is one route, visible, commented, and behind a
+    // login — and any page added later inherits the strict default instead of
+    // silently inheriting this.
+    //
+    // Retiring it means turning those 92 attributes into classes in
+    // inner.css. Mechanical, but a visual-regression risk on the screen the
+    // owner uses all day, so it is deliberately not bundled with this change.
+    const innerHtmlRoute = makePageRoute("inner.html", null, { cspHeader: ADMIN_CSP_HEADER });
     const deliveryHtmlRoute = makePageRoute("delivery.html");
     const tableHtmlRoute = makePageRoute("table.html");
     const driverHtmlRoute = makePageRoute("driver.html");
